@@ -48,11 +48,36 @@
 
 若你的目录不同，改这些常量即可。
 
-### 3. `GodotSharp.dll` 引用（编译手机版必改）
+### 3. `GodotSharp.dll` 引用（编译前必改）
 
-`androidmod/PvzheAndroid/PvzheMod.csproj` 与 `mod/PvzheMod/PvzheMod.csproj` 通过 `HintPath` 引用
-游戏目录里的 `GodotSharp.dll`。**这个文件不在本仓库**（属于游戏本体的运行时），
-请解包你**自己安装的游戏**，把 `HintPath` 指向你本机的那份。
+两个工程通过 `$(GodotSharpDir)` 引用游戏自带的 `GodotSharp.dll`：
+
+| 工程 | 文件 |
+|---|---|
+| 电脑版 | `mod/PvzheMod/PvzheMod.csproj` |
+| 手机版 | `androidmod/PvzheAndroid/PvzheMod.csproj` |
+
+这个 DLL **不在本仓库**（它属于游戏运行时），需从你**自己安装的游戏**里取：
+
+- **电脑版**：`<游戏根目录>\data_PlantsVsZombies_windows_x86_64\GodotSharp.dll`
+- **手机版**：APK 解包后的 `assets\.godot\mono\publish\arm64\GodotSharp.dll`
+
+**三种填法，任选其一：**
+
+1. **命令行传属性**（推荐，不改任何文件）
+   ```powershell
+   dotnet build mod/PvzheMod -c Release `
+     -p:GodotSharpDir="D:\你的游戏目录\data_PlantsVsZombies_windows_x86_64"
+   ```
+2. **设环境变量**（当前会话有效）
+   ```powershell
+   $env:GodotSharpDir = "D:\你的游戏目录\data_PlantsVsZombies_windows_x86_64"
+   dotnet build mod/PvzheMod -c Release
+   ```
+3. **直接改 `.csproj` 里那条 `<HintPath>`** 为绝对路径
+   —— 能用，但**不要把这条改动提交上去**（会暴露你的本机路径）
+
+> `GodotSharp.dll` 是游戏自带的第三方程序集，**请勿提交到本仓库**（`.gitignore` 已排除 `*.dll`）。
 
 ---
 
