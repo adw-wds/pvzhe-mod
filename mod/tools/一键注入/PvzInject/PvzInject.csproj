@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>杂交版MOD一键注入器</AssemblyName>
+    <RootNamespace>PvzInject</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyVersion>2.0.0.0</AssemblyVersion>
+    <FileVersion>2.0.0.0</FileVersion>
+    <Version>2.0.0</Version>
+    <!-- self-contained 单文件发布（默认关闭；用 -r win-x64 + self-contained true 参数时生效） -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)'==''">win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 内嵌资源：注入成品 DLL + 外置修改器整套 zip（framework 版，依赖游戏自带 .NET8；运行时解压） -->
+    <EmbeddedResource Include="res\PlantsVsZombies.dll" LogicalName="PvzInject.res.dll" />
+    <EmbeddedResource Include="res\PvzheRemote.zip" LogicalName="PvzInject.res.remotezip" />
+  </ItemGroup>
+
+</Project>

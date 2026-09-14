@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>PvzheCryptoTests</AssemblyName>
+    <RootNamespace>PvzheCryptoTests</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <!-- 直接链接 MOD 的密码学源码，保证被测试的就是真正上线的实现（禁止复制副本） -->
+    <Compile Include="..\..\mod\PvzheMod\Net\NetSha256.cs" Link="NetSha256.cs" />
+    <Compile Include="..\..\mod\PvzheMod\Net\NetAes.cs" Link="NetAes.cs" />
+    <Compile Include="..\..\mod\PvzheMod\Net\NetX25519.cs" Link="NetX25519.cs" />
+    <Compile Include="..\..\mod\PvzheMod\Net\NetProtocol.cs" Link="NetProtocol.cs" />
+    <Compile Include="..\..\mod\PvzheMod\Net\NetSecure.cs" Link="NetSecure.cs" />
+  </ItemGroup>
+</Project>

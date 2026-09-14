@@ -1,0 +1,16 @@
+<Application x:Class="PvzInject.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <!-- 全局配色/字体 -->
+        <SolidColorBrush x:Key="BgBrush" Color="#FFEFF3F7"/>
+        <SolidColorBrush x:Key="CardBrush" Color="#FFFFFFFF"/>
+        <SolidColorBrush x:Key="AccentBrush" Color="#FF34C759"/>
+        <SolidColorBrush x:Key="AccentDarkBrush" Color="#FF2AA84A"/>
+        <SolidColorBrush x:Key="TextBrush" Color="#FF1F2937"/>
+        <SolidColorBrush x:Key="SubBrush" Color="#FF6B7A8C"/>
+        <SolidColorBrush x:Key="BorderBrush" Color="#FFE2E8F0"/>
+        <FontFamily x:Key="AppFont">Microsoft YaHei UI</FontFamily>
+    </Application.Resources>
+</Application>

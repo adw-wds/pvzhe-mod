@@ -1,0 +1,17 @@
+# 构建产物
+bin/
+obj/
+publish/
+publish-linux/
+publish_ai/
+.vs/
+*.user
+*.suo
+
+# 日志与本地配置
+*.log
+mod_log*.txt
+*.prev.txt
+Local.settings.json
+
+

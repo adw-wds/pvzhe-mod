@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\PvzheRelay\Room.cs" Link="Room.cs" />
+    <Compile Include="..\PvzheRelay\RoomManager.cs" Link="RoomManager.cs" />
+    <Compile Include="..\PvzheRelay\RelayServer.cs" Link="RelayServer.cs" />
+    <Compile Include="..\..\mod\PvzheMod\Net\NetBitCodec.cs" Link="NetBitCodec.cs" />
+    <Compile Include="..\..\mod\PvzheMod\Net\NetProtocol.cs" Link="NetProtocol.cs" />
+    <Compile Include="..\..\mod\PvzheMod\Net\NetCrypto.cs" Link="NetCrypto.cs" />
+    <!-- v3 加密层：RelayServer 里有 Conn.Secure（NetSecureSession），测试项目必须一并编译 -->
+    <Compile Include="..\..\mod\PvzheMod\Net\NetSha256.cs" Link="NetSha256.cs" />
+    <Compile Include="..\..\mod\PvzheMod\Net\NetAes.cs" Link="NetAes.cs" />
+    <Compile Include="..\..\mod\PvzheMod\Net\NetX25519.cs" Link="NetX25519.cs" />
+    <Compile Include="..\..\mod\PvzheMod\Net\NetSecure.cs" Link="NetSecure.cs" />
+    <Compile Include="..\..\mod\PvzheMod\Net\NetRoomSettings.cs" Link="NetRoomSettings.cs" />
+    <Compile Include="..\..\mod\PvzheMod\Net\NetPeers.cs" Link="NetPeers.cs" />
+    <Compile Include="..\..\mod\PvzheMod\Net\NetLobby.cs" Link="NetLobby.cs" />
+  </ItemGroup>
+</Project>

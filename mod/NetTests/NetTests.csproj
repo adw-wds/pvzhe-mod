@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\PvzheMod\Net\NetBitCodec.cs" Link="NetBitCodec.cs" />
+    <Compile Include="..\PvzheMod\Net\NetProtocol.cs" Link="NetProtocol.cs" />
+    <Compile Include="..\PvzheMod\Net\NetSessionCore.cs" Link="NetSessionCore.cs" />
+    <Compile Include="..\PvzheMod\Net\NetCrypto.cs" Link="NetCrypto.cs" />
+    <Compile Include="..\PvzheMod\Net\NetRoomSettings.cs" Link="NetRoomSettings.cs" />
+    <Compile Include="..\PvzheMod\Net\NetPeers.cs" Link="NetPeers.cs" />
+    <Compile Include="..\PvzheMod\Net\NetLobby.cs" Link="NetLobby.cs" />
+  </ItemGroup>
+</Project>

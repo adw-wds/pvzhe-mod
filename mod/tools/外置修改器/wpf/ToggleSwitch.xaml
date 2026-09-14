@@ -1,0 +1,14 @@
+<UserControl x:Class="PvzheRemote.ToggleSwitch"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Width="40" Height="20" Cursor="Hand">
+    <!-- Win10 药丸开关：关=白底灰边灰钮，开=蓝底白钮。
+         ★ 颜色由 code-behind 按 IsOn 设（它会在构造/UpdateVisual 里覆写 Track.Background，
+           所以只改 XAML 会被盖回去），此处只负责形状。 -->
+    <Border x:Name="Track" Width="40" Height="20" CornerRadius="10"
+            Background="White" BorderBrush="{StaticResource InputBorderBrush}" BorderThickness="1"
+            MouseLeftButtonUp="OnToggle">
+        <Ellipse x:Name="Knob" Width="12" Height="12" Fill="#8A8A8A"
+                 HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4,0,0,0" IsHitTestVisible="False"/>
+    </Border>
+</UserControl>

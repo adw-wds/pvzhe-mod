@@ -1,0 +1,166 @@
+<Window x:Class="PvzInject.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="杂交版 MOD 一键注入器" Width="860" Height="720" MinWidth="720" MinHeight="600"
+        WindowStartupLocation="CenterScreen" FontFamily="{StaticResource AppFont}"
+        Background="{StaticResource BgBrush}" UseLayoutRounding="True">
+  <Window.Resources>
+    <!-- 圆角卡片 -->
+    <Style x:Key="Card" TargetType="Border">
+      <Setter Property="Background" Value="{StaticResource CardBrush}"/>
+      <Setter Property="CornerRadius" Value="16"/>
+      <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="20"/>
+    </Style>
+
+    <!-- 主按钮 -->
+    <Style x:Key="BigBtn" TargetType="Button">
+      <Setter Property="FontFamily" Value="{StaticResource AppFont}"/>
+      <Setter Property="FontSize" Value="16"/>
+      <Setter Property="FontWeight" Value="Bold"/>
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Height" Value="56"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="14" Padding="14,0">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="{StaticResource AccentDarkBrush}"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bd" Property="Opacity" Value="0.85"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="bd" Property="Background" Value="#FFB7C4CE"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- 次要按钮 -->
+    <Style x:Key="GhostBtn" TargetType="Button">
+      <Setter Property="FontFamily" Value="{StaticResource AppFont}"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+      <Setter Property="Background" Value="#FFF1F5F9"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Padding" Value="12,7"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="9"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="#FFE6F4EA"/>
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="bd" Property="Opacity" Value="0.7"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- 还原按钮（红） -->
+    <Style x:Key="RestoreBtn" TargetType="Button" BasedOn="{StaticResource GhostBtn}">
+      <Setter Property="Foreground" Value="#FFC0392B"/>
+      <Setter Property="Background" Value="#FFFDF3F2"/>
+    </Style>
+  </Window.Resources>
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+    </Grid.RowDefinitions>
+
+    <!-- 头部 -->
+    <Border Grid.Row="0" Background="White" Padding="22,16" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+      <StackPanel>
+        <StackPanel Orientation="Horizontal">
+          <TextBlock Text="🧬 杂交版 MOD 一键注入器" FontSize="20" FontWeight="Bold" Foreground="{StaticResource TextBrush}"/>
+          <TextBlock Text="  v2.0 内置版" FontSize="12" Foreground="{StaticResource SubBrush}" VerticalAlignment="Bottom" Margin="8,0,0,2"/>
+        </StackPanel>
+        <TextBlock Text="已内置 电脑版 MOD（DLL）+ 外置修改器，点「一键解压并注入游戏」自动装好。自动备份，随时可还原。" FontSize="12"
+                   Foreground="{StaticResource SubBrush}" Margin="0,6,0,0"/>
+      </StackPanel>
+    </Border>
+
+    <!-- 主体 -->
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+      <StackPanel Margin="24,18,24,24">
+
+        <!-- 第一步：内置内容 -->
+        <Border Style="{StaticResource Card}">
+          <StackPanel>
+            <TextBlock Text="1 · 内置内容（无需手动下载/解压）" FontSize="15" FontWeight="Bold" Foreground="{StaticResource TextBrush}"/>
+            <Border Background="#FFF1F8F4" CornerRadius="12" Margin="0,12,0,0" Padding="14"
+                    BorderBrush="#FFC9E4D4" BorderThickness="1">
+              <StackPanel>
+                <TextBlock x:Name="BuiltinDllText" Text="🧩 电脑版 MOD：PlantsVsZombies.dll（注入成品）" FontSize="13" Foreground="{StaticResource TextBrush}" TextWrapping="Wrap"/>
+                <TextBlock x:Name="BuiltinRemoteText" Text="🎮 外置修改器：杂交版外置修改器（遥控面板，整套）" FontSize="13" Foreground="{StaticResource TextBrush}" TextWrapping="Wrap" Margin="0,6,0,0"/>
+                <TextBlock Text="→ 注入时：DLL 放游戏 data 目录，外置修改器放游戏根目录" FontSize="12" Foreground="{StaticResource SubBrush}" Margin="0,8,0,0"/>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </Border>
+
+        <!-- 第二步：游戏目录 -->
+        <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+          <StackPanel>
+            <TextBlock Text="2 · 游戏目录（自动检测）" FontSize="15" FontWeight="Bold" Foreground="{StaticResource TextBrush}"/>
+            <TextBlock x:Name="DirText" Text="正在检测游戏目录…" FontSize="13" Foreground="{StaticResource SubBrush}" Margin="0,8,0,0" TextWrapping="Wrap"/>
+            <TextBlock x:Name="DllStateText" Text="" FontSize="12" Foreground="#FF9AA8B8" Margin="0,4,0,0" TextWrapping="Wrap"/>
+            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+              <Button x:Name="BtnBrowse" Content="🖥 检测 / 选择游戏目录" Style="{StaticResource GhostBtn}" Click="OnDetectDir"/>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <!-- 第三步：操作 -->
+        <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+          <StackPanel>
+            <TextBlock Text="3 · 一键解压并注入 / 还原" FontSize="15" FontWeight="Bold" Foreground="{StaticResource TextBrush}"/>
+            <Grid Margin="0,14,0,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="16"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <Button Grid.Column="0" x:Name="BtnInject" Content="⚡ 一键解压并注入游戏" Style="{StaticResource BigBtn}" Click="OnInject" IsEnabled="False"/>
+              <Button Grid.Column="2" x:Name="BtnRestore" Content="↩ 还原 MOD（卸载）" Style="{StaticResource RestoreBtn}" Click="OnRestore" IsEnabled="False"/>
+            </Grid>
+          </StackPanel>
+        </Border>
+
+        <!-- 日志 -->
+        <Border Style="{StaticResource Card}" Margin="0,14,0,0">
+          <StackPanel>
+            <TextBlock Text="运行日志" FontSize="14" FontWeight="Bold" Foreground="{StaticResource TextBrush}"/>
+            <Border Background="#FF0F1722" CornerRadius="10" Margin="0,10,0,0" Padding="12">
+              <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="180">
+                <TextBlock x:Name="LogText" FontFamily="Consolas" FontSize="12" Foreground="#FFBFE3C6"
+                           TextWrapping="Wrap" LineHeight="18"/>
+              </ScrollViewer>
+            </Border>
+          </StackPanel>
+        </Border>
+
+      </StackPanel>
+    </ScrollViewer>
+  </Grid>
+</Window>

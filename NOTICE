@@ -1,0 +1,19 @@
+杂交版 MOD（PvzheMod）
+Copyright 2026 小晓Air
+https://space.bilibili.com/3546789573561037
+
+This product includes software developed by third parties:
+
+  Mono.Cecil            MIT License    （IL 注入器 / patcher）
+  Godot Engine          MIT License    （游戏引擎；本仓库不含引擎源码）
+  .NET / WPF            MIT License    （外置修改器、中继、注入器）
+
+本仓库仅包含作者自行编写的源代码。
+
+以下内容不属于本仓库，其版权归各自权利人所有，Apache License 2.0 不适用于它们：
+
+  * 《植物大战僵尸 杂交版》游戏本体、程序集、图集、字体及其他资源
+  * 任何第三方绘画、图片、视频、音乐素材
+  * 任何服务器凭据（AccessKey / 域名 / 公网 IP / 中继令牌 / 签名私钥）
+
+服务器地址与鉴权令牌在开源版本中已替换为占位符（见 README 的「先读这一节」）。
