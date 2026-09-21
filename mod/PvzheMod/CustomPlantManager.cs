@@ -32,6 +32,8 @@ public sealed class CustomPlantManager
         ApplyParams(cfg, def);
         ApplyAttack(cfg, def);   // I2: 应用攻击参数（攻速/子弹）——玩家填的攻速/子弹此前从未生效
         ApplyTextures(cfg, def);
+        // 真二创：把 config 关联的 PackedScene 换成用户自己的场景（未填/失败 = 什么都不改）
+        ApplyCustomScene(cfg, def);
         // I1: 覆盖语义——同名重载视为"更新"（重注册）。先校验后注册：解析/模板校验/克隆/覆盖/换图全在注册前，失败不污染 Dict
         bool existed = Dict.ContainsKey(def.Name);
         Dict[def.Name] = def;
@@ -65,6 +67,9 @@ public sealed class CustomPlantManager
                 Cooldown = GetNum(d, "cooldown", 7.5),
                 Hp = GetNum(d, "hp", 300),
                 Scale = GetNum(d, "scale", 1.0),
+                // 真二创（可选）：项目目录内的场景文件名，如 "scene.tscn"。
+                // 不填 = 完全维持原行为（克隆原生模板 + 换贴图）。
+                Scene = GetStr(d, "scene", ""),
             };
             var ad = GetDict(d, "attack");
             if (ad != null)
@@ -94,8 +99,89 @@ public sealed class CustomPlantManager
         catch { return null; }
     }
 
-    private static Godot.Collections.Dictionary GetDict(Godot.Collections.Dictionary d, string key)
+    // ==================== 真二创：用户自己的 Godot 场景 ====================
+
+    /// <summary>
+    /// **真二创**：把原生植物 config 关联的 PackedScene 换成用户自己的场景。
+    ///
+    /// 【为什么用"换 PackedScene"而不是自己 Instantiate 再挂节点】
+    /// 游戏本来就通过 characterConfig → PackedScene.Instantiate() 建植物实体。
+    /// 只要把那个字段指到用户的场景，游戏的实例化 / 挂载 / 动画 / 生命周期**全部照旧** ——
+    /// 这是**改数据、不改流程**，是风险最小的接入方式。
+    ///
+    /// 【已实测的两个前提】
+    ///   ① 游戏能从盘上散装加载 <c>res://</c> 资源（ResourceLoader.Load 一个散装 .tscn 成功拿到 PackedScene）；
+    ///   ② <c>res://</c> == 游戏主程序目录，所以内容必须发布在游戏目录下（PvzModContent\）才看得见。
+    ///      —— 实测同时发现 DirAccess **枚举不到**散装文件，所以必须靠 config.json 显式给路径，
+    ///         不能指望游戏自己扫目录（这也正是本字段存在的原因）。
+    ///
+    /// 【失败策略】未填 / 项目不在游戏目录下 / 加载不到 / 类型不对
+    /// → **什么都不改**（保持原生场景），并把**具体是哪一步**写进日志。
+    /// 真二创是增益，绝不能让它拖垮原本能用的"克隆模板 + 换贴图"路线。
+    /// </summary>
+    private static void ApplyCustomScene(object cfg, CustomPlantDef def)
     {
+        try
+        {
+            if (def == null || string.IsNullOrWhiteSpace(def.Scene)) return;   // 未填 → 现有行为完全不变
+
+            var resDir = ToResPath(def);
+            if (resDir == null)
+            {
+                Bootstrap.Log("自定义植物 真二创 失败(" + def.Name + "): 项目不在游戏目录下，res:// 看不见 → " + def.Dir
+                            + "（把内容放到 <游戏根>\\PvzModContent 下即可）");
+                return;
+            }
+
+            var full = resDir + "/" + def.Scene;
+            var loaded = Godot.ResourceLoader.Load(full);
+            if (loaded == null)
+            {
+                Bootstrap.Log("自定义植物 真二创 失败(" + def.Name + "): 加载不到 " + full + "（保持原生场景）");
+                return;
+            }
+
+            var packed = loaded as Godot.PackedScene;
+            if (packed == null)
+            {
+                Bootstrap.Log("自定义植物 真二创 失败(" + def.Name + "): " + full
+                            + " 不是 PackedScene，而是 " + loaded.GetType().Name);
+                return;
+            }
+
+            var hit = RegisterCustomScene(def, packed);
+            Bootstrap.Log("自定义植物 真二创 生效(" + def.Name + "): 自建场景 " + full
+                        + " 已登记 → 键=" + hit + "（游戏查 TOWERDEFENSE_CHARCATERS 前自动写入）");
+            // 即时自检：直接调游戏真正的 GetCharacterScene(name)，看拿到的到底是不是这份场景。
+            // GetCharacterScene 是纯字典查表，所以注册完就能验，不必等玩家进关卡种下植物。
+            GameCheats.SelfTestCustomScene(def.Name);
+        }
+        catch (Exception ex)
+        {
+            Bootstrap.Log("自定义植物 真二创 异常(" + (def != null ? def.Name : "?") + "): "
+                        + ex.GetType().Name + " " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 项目绝对目录 → <c>res://</c> 路径。
+    /// <c>res://</c> 只覆盖**游戏主程序目录下**的那棵树，所以靠 "PvzModContent" 这一段把它剪出来；
+    /// 不在该树下返回 null（调用方会写清原因，不静默）。
+    /// </summary>
+    private static string ToResPath(CustomPlantDef def)
+    {
+        if (def == null || string.IsNullOrEmpty(def.Dir)) return null;
+
+        var abs = def.Dir.Replace('\\', '/').TrimEnd('/');
+        var marker = "/" + CustomProjectManager.RootFolderName + "/";   // "/PvzModContent/"
+
+        var i = abs.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (i < 0) return null;
+
+        return "res://" + abs.Substring(i + 1);   // "res://PvzModContent/custom_projects/plant/xxx"
+    }
+
+    private static Godot.Collections.Dictionary GetDict(Godot.Collections.Dictionary d, string key)    {
         foreach (var k in d.Keys)
             if (k.AsString().Equals(key, StringComparison.OrdinalIgnoreCase))
                 return d[k].VariantType == Godot.Variant.Type.Dictionary ? d[k].AsGodotDictionary() : null;
@@ -243,15 +329,103 @@ public sealed class CustomPlantManager
         return null;
     }
 
+    static bool _ccNameLogged;   // 角色层字段名适配日志（只打一次）
+    static bool _ccFailLogged;   // 角色层取不到日志（只打一次，附带实际字段名）
+    static bool _rmFieldsLogged; // 注册失败时列出 ResourceManager 候选成员（只打一次）
+
+    // ---- 真二创：自定义角色场景登记表（键 = 角色名，值 = 玩家自建的 PackedScene）----
+    static readonly Dictionary<string, Godot.PackedScene> _customScenes =
+        new Dictionary<string, Godot.PackedScene>(StringComparer.OrdinalIgnoreCase);
+    static readonly HashSet<string> _sceneInjectLogged = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    static bool _sceneNameProbed;
+
+    internal static int CustomSceneCount => _customScenes.Count;
+
+    /// <summary>把玩家自建场景登记为「角色名 → PackedScene」，供 GameCheats.EnsureCharacterSceneLoaded
+    /// 在游戏查 TOWERDEFENSE_CHARCATERS 之前写入（GetCharacterScene 本身只查字典、不加载）。
+    /// 登记名一律用 def.Name —— 也就是我们注册进卡栏的那个名字，即游戏将要传递的 characterName。
+    /// **绝不登记成模板角色名**，否则会连带把原版植物的场景也换掉。返回登记的键便于日志核对。</summary>
+    internal static string RegisterCustomScene(CustomPlantDef def, Godot.PackedScene scene)
+    {
+        var key = def.Name;
+        _customScenes[key] = scene;
+        return key;
+    }
+
+    /// <summary>命中返回 true 并给出自建场景。</summary>
+    internal static bool TryGetCustomScene(string characterName, out Godot.PackedScene scene)
+    {
+        scene = null;
+        if (string.IsNullOrEmpty(characterName)) return false;
+        return _customScenes.TryGetValue(characterName, out scene) && scene != null;
+    }
+
+    /// <summary>同一角色名只打一次"已注入"日志（避免每放置一次刷屏）。</summary>
+    internal static bool MarkSceneInjected(string characterName)
+        => _sceneInjectLogged.Add(characterName ?? "");
+
+    /// <summary>游戏请求了一个**它自己字典里也没有**的角色名 → 极可能就是我们的自定义植物，
+    /// 但名字与登记名对不上。只打一次，用来实测游戏到底把我们的植物叫什么（不猜）。</summary>
+    internal static void ProbeUnknownCharacter(string characterName)
+    {
+        if (_sceneNameProbed || string.IsNullOrEmpty(characterName)) return;
+        _sceneNameProbed = true;
+        var names = new StringBuilder();
+        foreach (var k in _customScenes.Keys) { if (names.Length > 0) names.Append(','); names.Append(k); }
+        Bootstrap.Log("自定义植物 真二创 探测: 游戏请求角色名 \"" + characterName
+                    + "\" 既不在游戏字典也不在自建表[" + names + "] → 注册名与游戏请求名不一致");
+    }
+
+    /// <summary>取角色层（TowerDefensePlantConfig：真实 cost/packetCooldown/hp/maxHp 与角色场景都在这一层）。
+    /// 0.28 实测字段名为 **_characterConfig**（本 mod 的"自定义植物探测"日志已列出顶层字段），
+    /// 而 0.26/0.27 为 characterConfig → 按候选名逐个探测，全找不到才返回 null 并打印实际字段名，
+    /// 绝不静默失败（历史上正是这里恒返回 null，导致 cost/攻击/场景替换/注册全部静默失效）。</summary>
     private static object GetCharacterConfig(object cfg)
     {
+        if (cfg == null) return null;
+        const System.Reflection.BindingFlags BF = System.Reflection.BindingFlags.Public
+            | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
         try
         {
-            var f = cfg.GetType().GetField("characterConfig", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (f == null) return null;
-            return f.GetValue(cfg);
+            var t = cfg.GetType();
+            // ① 明确候选名（新→旧），字段存在但值为空时继续找，不提前放弃
+            foreach (var nm in new[] { "_characterConfig", "characterConfig", "_CharacterConfig", "CharacterConfig", "m_characterConfig" })
+            {
+                var f = t.GetField(nm, BF);
+                if (f == null) continue;
+                var v = f.GetValue(cfg);
+                if (v != null)
+                {
+                    if (nm != "characterConfig" && !_ccNameLogged)
+                    { _ccNameLogged = true; Bootstrap.Log("自定义植物: 角色层字段名 = " + nm + "（本版本与内置默认名不同，已自动适配）"); }
+                    return v;
+                }
+            }
+            // ② 模糊：忽略下划线/大小写后等于 characterConfig
+            foreach (var f in t.GetFields(BF))
+            {
+                if (!f.Name.Replace("_", "").Equals("characterConfig", StringComparison.OrdinalIgnoreCase)) continue;
+                var v = f.GetValue(cfg);
+                if (v != null)
+                {
+                    if (!_ccNameLogged) { _ccNameLogged = true; Bootstrap.Log("自定义植物: 角色层字段名 = " + f.Name + "（模糊匹配命中）"); }
+                    return v;
+                }
+            }
+            // ③ 属性兜底
+            var p = t.GetProperty("CharacterConfig", BF) ?? t.GetProperty("characterConfig", BF);
+            if (p != null) { var v = p.GetValue(cfg); if (v != null) return v; }
+            // ④ 全失败：把实际顶层字段名打出来，便于对症（只打一次，避免刷屏）
+            if (!_ccFailLogged)
+            {
+                _ccFailLogged = true;
+                var names = new StringBuilder();
+                foreach (var f in t.GetFields(BF)) { if (names.Length > 0) names.Append(','); names.Append(f.Name); }
+                Bootstrap.Log("自定义植物: 取不到角色层（含 characterConfig 的字段/属性均不存在或为空）顶层字段=[" + names + "]");
+            }
         }
-        catch { return null; }
+        catch { }
+        return null;
     }
 
     private static object DuplicateConfig(object cfg)
@@ -306,8 +480,10 @@ public sealed class CustomPlantManager
         {
             SetNumField(cc, "cost", def.Cost);
             SetNumField(cc, "packetCooldown", def.Cooldown);
-            SetNumField(cc, "hp", def.Hp);
-            SetNumField(cc, "maxHp", def.Hp);
+            // 血量：0.28 实测角色层的真实字段名是 hitpoints —— 探测日志列出的 29 个字段里**没有** hp/maxHp，
+            // 所以按候选名逐个试、命中即止（SetNumField 未命中不抛、只是不生效）。
+            foreach (var hpName in new[] { "hitpoints", "hp", "maxHp", "maxHitpoints", "health", "maxHealth" })
+                SetNumField(cc, hpName, def.Hp);
         }
         // 顶层兜底：overrideCost(Int)/overridePacketCooldown(Single)——SetNumField 按字段类型自动转 int/float
         SetNumField(cfg, "overrideCost", def.Cost);
@@ -462,7 +638,7 @@ public sealed class CustomPlantManager
         var sb = new StringBuilder("自定义植物探测: [" + def.Template + "]");
         sb.Append(" 顶=[").Append(string.Join(",", topNames)).Append(']');
         sb.Append(" 字=[").Append(cc != null ? string.Join(",", ccNames) : "无").Append(']');
-        foreach (var k in new[] { "cost", "packetCooldown", "hp", "maxHp", "overrideCost", "overridePacketCooldown" })
+        foreach (var k in new[] { "cost", "packetCooldown", "hitpoints", "hp", "maxHp", "overrideCost", "overridePacketCooldown" })
         {
             bool top = FindNumField(dcfg, k) != null;
             bool ccHit = cc != null && FindNumField(cc, k) != null;
@@ -789,36 +965,104 @@ public sealed class CustomPlantManager
         catch { return null; }
     }
 
-    /// <summary>把 name 加进列表容器（IList.Add 优先；否则反射 Add(string)）。已存在返回 false。</summary>
+    /// <summary>把 name 加进列表容器（IList.Add 优先；否则扫描 Add/Append/PushBack(string|Variant)）。
+    /// ★ 0.28 实测教训：原先只认 Add(string)，而 Godot 的 <c>Godot.Collections.Array</c> 用的方法是
+    ///   <c>Append(Variant)</c> → 走到最后 return false，且异常被 catch 吞掉，只看到"列表追加失败"四个字。
+    ///   现在：① 覆盖 Godot 容器方法名；② 每一次失败都把容器真实类型/异常原因写进日志（不再静默）。
+    /// 已存在返回 false。</summary>
     static bool AddNameToContainer(object container, string name)
     {
+        if (container == null) { Bootstrap.Log("自定义植物 注册: 列表容器为 null"); return false; }
+        var t = container.GetType();
+
+        // ★ 0.28 真机实测（2026-09-19）：容器真实类型是 Godot.Collections.Array（非泛型），
+        //   其 Add/Contains 只接受 Godot.Variant，而反射 Invoke **不会**把 string 隐式转成 Variant，
+        //   会抛 "Object of type 'System.String' cannot be converted to type 'Godot.Variant'"。
+        //   所以这里必须用**强类型调用**，让编译器插入 string→Variant 的隐式转换（反射做不到）。
+        if (container is Godot.Collections.Array garr)
+        {
+            try
+            {
+                if (garr.Contains(name))
+                {
+                    Bootstrap.Log("自定义植物 注册: 列表已含 " + name + "（Godot.Collections.Array），不重复追加");
+                    return false;
+                }
+                garr.Add(name);
+                Bootstrap.Log("自定义植物 注册: 列表追加命中 Godot.Collections.Array.Add(Variant)");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Bootstrap.Log("自定义植物 注册: Godot.Collections.Array.Add 抛 " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
         try
         {
             if (container is System.Collections.IList il)
             {
-                if (il.Contains(name)) return false;
+                if (il.Contains(name))
+                {
+                    Bootstrap.Log("自定义植物 注册: 列表已含 " + name + "（容器 " + t.FullName + "），不重复追加");
+                    return false;
+                }
                 il.Add(name);
-                return true;
-            }
-            var t = container.GetType();
-            var add = t.GetMethod("Add", new Type[] { typeof(string) });
-            if (add != null)
-            {
-                var contains = t.GetMethod("Contains", new Type[] { typeof(string) });
-                if (contains != null && contains.Invoke(container, new object[] { name }) is bool b && b) return false;
-                add.Invoke(container, new object[] { name });
+                Bootstrap.Log("自定义植物 注册: 列表追加命中 " + t.FullName + ".Add(IList)");
                 return true;
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Bootstrap.Log("自定义植物 注册: IList.Add 抛 " + ex.GetType().Name + ": " + ex.Message
+                        + "（容器 " + t.FullName + "）→ 继续尝试 Godot 风格方法名");
+        }
+
+        // 扫描 Add/Append/PushBack（含 Godot Variant 形参）
+        // ★ 必须用 GetMethods(flags)：IL2CPP 裁剪掉了无参 GetMethods() 重载，调用会抛
+        //   "Method not found: 'MethodInfo[] Type.GetMethods()'"（本 mod 已在真机上踩过一次）。
+        const System.Reflection.BindingFlags MF = System.Reflection.BindingFlags.Public
+            | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var tried = new StringBuilder();
+        foreach (var m in t.GetMethods(MF))
+        {
+            if (m.Name != "Add" && m.Name != "Append" && m.Name != "PushBack" && m.Name != "push_back") continue;
+            var ps = m.GetParameters();
+            if (ps.Length != 1) continue;
+            var pt = ps[0].ParameterType;
+            if (pt != typeof(string) && pt != typeof(object) && pt.Name != "Variant") continue;
+            if (tried.Length > 0) tried.Append(',');
+            tried.Append(m.Name).Append('(').Append(pt.Name).Append(')');
+            try
+            {
+                m.Invoke(container, new object[] { name });
+                Bootstrap.Log("自定义植物 注册: 列表追加命中 " + t.FullName + "." + m.Name + "(" + pt.Name + ")");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Bootstrap.Log("自定义植物 注册: " + m.Name + "(" + pt.Name + ") 抛 " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+        Bootstrap.Log("自定义植物 注册: 列表追加失败——容器 " + t.FullName + " 无可用追加方法（试过: "
+                    + (tried.Length > 0 ? tried.ToString() : "无") + "）");
         return false;
     }
 
-    /// <summary>探测式注册 name→cfg 到 ResourceManager 的 config 缓存字典（候选字段名列表）。命中返回 true；找不到缓存字典返回 false（I-2：调用方不得追加列表，失败安全）。</summary>
+    /// <summary>注册 name→cfg 到游戏的 packet 配置字典，并把 packet→角色名 映射指向 name。
+    /// 0.28 实测（2026-09-19 ResourceManager 成员清单）：packet 配置字典是 TOWERDEFENSE_PACKETS，
+    /// 角色名映射是 _characterNameByPacket；旧候选名在本版本全部不存在。命中返回 true。
+    /// ★ 这个映射就是真二创闭环的关键：游戏按角色名查 TOWERDEFENSE_CHARCATERS 拿场景，
+    ///   指向 name 才能命中我们登记的自建场景。
+    /// 失败返回 false（I-2：调用方不得追加列表，失败安全）。</summary>
     static bool RegisterConfigLookup(object cfg, string name)
     {
         try
         {
+            // ① 0.28 正确路径（新）：packet 配置字典 + packet→角色名 映射成对写入
+            if (GameCheats.RegisterCustomPacket(name, cfg, name)) return true;
+
+            // ② 老版本兜底：探测旧的 config 缓存字段名
             var rm = FindResourceManagerInstance();
             if (rm == null) { Bootstrap.Log("自定义植物 注册: ResourceManager 不可用"); return false; }
             var t = rm.GetType();
@@ -835,7 +1079,24 @@ public sealed class CustomPlantManager
                     return true;
                 }
             }
-            Bootstrap.Log("自定义植物 注册: 未找到config缓存字典");
+            // 失败必须能看出该往哪写：把 ResourceManager 上像「配置/缓存/包」的成员名列出来（只打一次），
+            // 下一轮即可据实测名补进候选列表，而不是继续猜（0.28 已证旧名 _packetConfigCache 全不存在）。
+            if (!_rmFieldsLogged)
+            {
+                _rmFieldsLogged = true;
+                var cand = new StringBuilder();
+                foreach (var f in t.GetFields(flags))
+                {
+                    var n = f.Name;
+                    if (n.IndexOf("config", StringComparison.OrdinalIgnoreCase) < 0
+                        && n.IndexOf("cache", StringComparison.OrdinalIgnoreCase) < 0
+                        && n.IndexOf("packet", StringComparison.OrdinalIgnoreCase) < 0
+                        && n.IndexOf("character", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    if (cand.Length > 0) cand.Append(',');
+                    cand.Append(n).Append(':').Append(f.FieldType.Name);
+                }
+                Bootstrap.Log("自定义植物 注册: 未找到config缓存字典；ResourceManager 候选成员=[" + cand + "]");
+            }
             return false;
         }
         catch { return false; }
@@ -889,8 +1150,23 @@ public sealed class CustomPlantManager
                     }
                 }
             }
+
+            // 失败必须能看出**为什么**。这里最容易踩的坑不是 id 写错，而是
+            // 首帧时游戏的 config 系统还没就绪 → 所有 id 都查不到，表现与"模板名写错"完全一样。
+            // 所以把关键事实打出来：映射有没有、游戏此刻给回多少 id。
+            var mapped = TEMPLATES.TryGetValue(template, out var mid) ? mid : "(无映射)";
+            var n = -2;
+            try { var ids2 = GameCheats.GetPacketIds(true); n = ids2 == null ? -1 : ids2.Count; } catch { }
+            Bootstrap.Log("自定义植物 模板解析失败: " + template
+                        + " | 直接查 id 未命中"
+                        + " | TEMPLATES 映射=" + mapped
+                        + " | 游戏可用 id 数=" + n
+                        + (n == 0 ? " ★ config 系统可能还没就绪（首帧调用太早）" : ""));
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Bootstrap.Log("自定义植物 模板解析异常(" + template + "): " + ex.GetType().Name + " " + ex.Message);
+        }
         return null;
     }
 
@@ -935,6 +1211,12 @@ public sealed class CustomPlantDef
     public PassiveDef Passive = new();   // SP4: 被动能力（kind/value）
     public double Scale = 1.0;
     public string Dir = "";
+
+    /// <summary>
+    /// 真二创（可选）：项目目录内的场景文件名，如 <c>scene.tscn</c>。
+    /// 空 = 走原有"克隆原生模板 + 换贴图"路线。
+    /// </summary>
+    public string Scene = "";
 }
 
 public sealed class CustomAttackDef

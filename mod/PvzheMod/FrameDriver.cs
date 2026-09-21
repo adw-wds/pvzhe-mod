@@ -67,6 +67,10 @@ namespace PvzheMod
                 // 心跳：每 1800 次调用（约 30 秒）确认主循环在跑（诊断用，低频避免写盘）+ 缓冲日志落盘
                 if (++_procHeartbeat >= 1800) { _procHeartbeat = 0; Bootstrap.Log("FrameDriver 心跳: 主循环运行中"); Bootstrap.FlushLog(); }
 
+                // 功能开关变化采集（内部降频）：diff ModSettings 全部静态字段，供外置修改器弹提示。
+                // 放在 loading 判断之前 —— 加载中/主菜单切换开关也要能弹。
+                ChangeLog.Tick();
+
                 bool loading = CheckSceneLoading(root);
                 // 游戏功能：内部已有"全关总开关快速路径"——全关时第一行返回（零遍历零反射）
                 GameCheats.OnFrame(root);

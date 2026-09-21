@@ -149,7 +149,7 @@
 | `GodotSharp.dll` | **不使用 NuGet 版**，直接 HintPath 引用**游戏目录里那一份** | 版本必须与游戏完全一致，否则 `CS0246` / 运行期类型不匹配 | 见 3.2 路径 |
 | Mono.Cecil | 注入器依赖（不通过 NuGet 时放同目录） | IL 读写 | 编译成功即证明 |
 | Python | 3.11+（部分工具脚本、pck 解包/打包） | 工具链，不参与 MOD 运行 | `python -V` |
-| ilspycmd | `dotnet "D:\杂交版关卡\tools\ilspy\ilspycmd9\tools\net8.0\any\ilspycmd.dll" -p -o <输出目录> <dll>` | **验证游戏内部结构的唯一可信手段**（猜字段 = 修 3 轮） | 能反编译出类型即 OK |
+| ilspycmd | `dotnet "CHANGE_ME_PROJECT_DIR\tools\ilspy\ilspycmd9\tools\net8.0\any\ilspycmd.dll" -p -o <输出目录> <dll>` | **验证游戏内部结构的唯一可信手段**（猜字段 = 修 3 轮） | 能反编译出类型即 OK |
 | dotnet-dump | `dotnet tool install -g dotnet-dump` | 排查「界面假死 / CPU 0% 卡住」（能抓主线程栈） | `dotnet-dump --version` |
 | JDK + Android SDK | 手机版打包用，**必须显式指定**（`JAVA_HOME` 常被 Android Studio 的 jbr 占坏） | `build_apk` 依赖 | 见 8.3 |
 
@@ -157,13 +157,13 @@
 
 | 用途 | 路径 |
 |---|---|
-| 电脑版游戏主程序集 | `D:\植物大战僵尸杂交版\植物大战僵尸杂交版0.27\植物大战僵尸杂交重制版\data_PlantsVsZombies_windows_x86_64\PlantsVsZombies.dll` |
+| 电脑版游戏主程序集 | `<你的游戏目录>
 | 同目录应有 | `PlantsVsZombies.dll.bak`（**干净基准**，patcher 恢复用）、`PlantsVsZombies.dll.modded`（上一次注入版） |
-| 手机版 APK | `D:\植物大战僵尸杂交版\植物大战僵尸杂交版0.27.APK`（解包后作根目录） |
+| 手机版 APK | `<你的游戏目录>
 | 手机版注入目标 | 解包根目录下 `assets\.godot\mono\publish\arm64\` 里的主程序集 + `PvzheMod.dll` |
-| MOD 运行日志 | `D:\杂交版关卡\mod\mod_log.txt`（`Bootstrap.Log` 输出，**无时间戳、累加写入、看尾部**） |
-| 设置持久化 | `D:\杂交版关卡\mod\modsettings.txt`（PC）；手机 = `user://modsettings.txt` |
-| 自定义卡池文件 | `D:\杂交版关卡\mod\trickpool.txt`（外置面板写、游戏读，避免超长 URL） |
+| MOD 运行日志 | `mod\mod_log.txt`（`Bootstrap.Log` 输出，**无时间戳、累加写入、看尾部**） |
+| 设置持久化 | `mod\modsettings.txt`（PC）；手机 = `user://modsettings.txt` |
+| 自定义卡池文件 | `mod\trickpool.txt`（外置面板写、游戏读，避免超长 URL） |
 
 > ⚠️ **`.bak` 是命根子**：它缺失时 patcher 会基于「上次注入版」合并，**已存在的类型不会被更新** → 「改了但没生效」。
 > 部署前永远先确认 `.bak` 存在且大小 = 干净原版（0.27 = 24,386,496 字节量级）。
@@ -173,7 +173,7 @@
 ```powershell
 pwsh -v
 dotnet --list-sdks
-Test-Path 'D:\植物大战僵尸杂交版\植物大战僵尸杂交版0.27\植物大战僵尸杂交重制版\data_PlantsVsZombies_windows_x86_64\PlantsVsZombies.dll.bak'
+Test-Path '<你的游戏目录>'
 (Get-Item '...\PlantsVsZombies.dll.bak').Length
 Get-Process | Where-Object { $_.ProcessName -like '*植物大战僵尸*' }   # 注入前必须关游戏
 ```
@@ -450,13 +450,13 @@ Get-Process | Where-Object { $_.ProcessName -like '*植物大战僵尸*' }   # �
 ```powershell
 # 0) 关游戏（DLL 被占用会写不进去）；确认干净基准存在
 Get-Process | Where-Object { $_.ProcessName -like '*植物大战僵尸*' } | Stop-Process -Force
-Test-Path 'D:\植物大战僵尸杂交版\植物大战僵尸杂交版0.27\植物大战僵尸杂交重制版\data_PlantsVsZombies_windows_x86_64\PlantsVsZombies.dll.bak'
+Test-Path '<你的游戏目录>'
 
 # 1) 编译 MOD（0 error 才算过）
-dotnet build 'D:\杂交版关卡\mod\PvzheMod\PvzheMod.csproj' -c Release
+dotnet build 'mod\PvzheMod\PvzheMod.csproj' -c Release
 
 # 2) 注入（patcher：从 .bak 恢复 → MergeTypes 合并 → 按规则写 IL → ScanBadIL → 写回）
-pwsh -File 'D:\杂交版关卡\mod\build_pc.ps1'
+pwsh -File 'mod\build_pc.ps1'
 #    或者直接跑注入器；它必须打印每个注入点命中情况，且结尾 bad=0
 
 # 3) 验证（三重）
@@ -464,7 +464,7 @@ pwsh -File 'D:\杂交版关卡\mod\build_pc.ps1'
 [System.Text.Encoding]::Unicode.GetString([IO.File]::ReadAllBytes('...\PlantsVsZombies.dll')) -match '你新加的方法名'
 
 # 4) 复制成品到发布目录
-Copy-Item '...\PlantsVsZombies.dll' 'D:\杂交版关卡\mod\release\成品DLL\'
+Copy-Item '...\PlantsVsZombies.dll' 'mod\release\成品DLL\'
 ```
 
 **要点**
@@ -477,30 +477,30 @@ Copy-Item '...\PlantsVsZombies.dll' 'D:\杂交版关卡\mod\release\成品DLL\'
 
 ```powershell
 # 1) 编译（产出 PvzheMod.dll）
-dotnet build 'D:\杂交版关卡\androidmod\PvzheAndroid\PvzheMod.csproj' -c Release
+dotnet build 'CHANGE_ME_PROJECT_DIR\androidmod\PvzheAndroid\PvzheMod.csproj' -c Release
 #    ⚠️ 注意输出在 bin\Release\net8.0\PvzheMod.dll（有 TFM 子目录）
 
 # 2) ★ 手动把最新 PvzheMod.dll 复制到 arm64 publish 目录（否则 APK 里是旧版！）
-$gameDir = 'D:\植物大战僵尸杂交版\assets\.godot\mono\publish\arm64'
+$gameDir = '<你的游戏目录>'
 Copy-Item '...\bin\Release\net8.0\PvzheMod.dll' $gameDir -Force
 
 # 3) 注入（android_patcher：ImportReference 引用独立 DLL 里的方法）
-dotnet run --project 'D:\杂交版关卡\androidmod\android_patcher\patcher.csproj' -c Release
+dotnet run --project 'CHANGE_ME_PROJECT_DIR\androidmod\android_patcher\patcher.csproj' -c Release
 
 # 4) 打 APK（必须 pwsh -File）
-pwsh -File 'D:\杂交版关卡\androidmod\build_apk.ps1'
+pwsh -File 'CHANGE_ME_PROJECT_DIR\androidmod\build_apk.ps1'
 ```
 
 **要点**
 - 手机版 **不合并类型**（合并必闪退）→ `PvzheMod.dll` 作为独立程序集随包加载。所以「复制 DLL」这一步是**最容易漏、最难发现**的坑（APK 里静静躺着旧版）。
-- `JAVA_HOME` 常被 Android Studio 的 `jbr` 占坏 → 显式覆盖：`$env:JAVA_HOME='D:\杂交版关卡\androidmod\tools\jdk'`；build-tools 用已安装的那份。
+- `JAVA_HOME` 常被 Android Studio 的 `jbr` 占坏 → 显式覆盖：`$env:JAVA_HOME='CHANGE_ME_PROJECT_DIR\androidmod\tools\jdk'`；build-tools 用已安装的那份。
 - 打包后**核对 APK 内 DLL 的 MD5** 与刚构建的一致（可以写进脚本），否则等于没更新。
 - 手机版设置写在 `user://modsettings.txt`；手机版**保留游戏内面板**（没有外置 exe）。
 
 ### 8.3 外置修改器（WPF）
 
 ```powershell
-dotnet publish 'D:\杂交版关卡\mod\tools\外置修改器\wpf\PvzheRemote.csproj' -c Release -r win-x64 `
+dotnet publish 'mod\tools\外置修改器\wpf\PvzheRemote.csproj' -c Release -r win-x64 `
   --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true `
   -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -o publish_sf
 ```
@@ -513,7 +513,7 @@ dotnet publish 'D:\杂交版关卡\mod\tools\外置修改器\wpf\PvzheRemote.csp
 
 ### 8.4 发布目录惯例（用户明确要求）
 
-`D:\杂交版关卡\release\最终打包_YYYYMMDD\`（**每次新建当天日期目录**），内含：
+`CHANGE_ME_PROJECT_DIR\release\最终打包_YYYYMMDD\`（**每次新建当天日期目录**），内含：
 `杂交版MOD_手机版.apk` + `.apk.zip`、`杂交版MOD包_电脑版.zip`、`PlantsVsZombies_电脑版注入DLL.dll`、`外置修改器\`（exe + 使用说明）、一键注入器 exe。
 
 ⚠️ **打包用 .NET 的 `ZipFile::CreateFromDirectory` / `ZipFile::Open(path, 'Create')`，不要用 `Compress-Archive`**：
@@ -712,7 +712,7 @@ dotnet publish 'D:\杂交版关卡\mod\tools\外置修改器\wpf\PvzheRemote.csp
 - `mod_log.txt` 是**累加、无时间戳**的。看"最后几行"容易被旧异常误导。
 - 正确做法：**先记当前行数 → 触发操作 → 只看新增的行**。
   ```powershell
-  $p='D:\杂交版关卡\mod\mod_log.txt'; $n=(Get-Content $p).Count; "before=$n"
+  $p='mod\mod_log.txt'; $n=(Get-Content $p).Count; "before=$n"
   # 触发操作...
   Get-Content $p | Select-Object -Skip $n
   ```
@@ -731,9 +731,9 @@ dotnet publish 'D:\杂交版关卡\mod\tools\外置修改器\wpf\PvzheRemote.csp
 ### 13.3 反编译（唯一可信的证据来源）
 
 ```powershell
-dotnet "D:\杂交版关卡\tools\ilspy\ilspycmd9\tools\net8.0\any\ilspycmd.dll" -p -o D:\tmp\dec '...\PlantsVsZombies.dll'
+dotnet "CHANGE_ME_PROJECT_DIR\tools\ilspy\ilspycmd9\tools\net8.0\any\ilspycmd.dll" -p -o D:\tmp\dec '...\PlantsVsZombies.dll'
 # 单类型/单方法
-dotnet "D:\杂交版关卡\tools\ilspy\ilspycmd9\tools\net8.0\any\ilspycmd.dll" -t FireComponent '...\PlantsVsZombies.dll' | Select-String 'fireInterval'
+dotnet "CHANGE_ME_PROJECT_DIR\tools\ilspy\ilspycmd9\tools\net8.0\any\ilspycmd.dll" -t FireComponent '...\PlantsVsZombies.dll' | Select-String 'fireInterval'
 ```
 
 ### 13.4 卡死 / 假死
@@ -3099,7 +3099,7 @@ static void AutoRandomizeSeedBank(Node root)
 - **取证**：save.res 实测 + Init JSON
 
 #### `modsettings.txt`
-- PC：`D:\杂交版关卡\mod\modsettings.txt`；手机：`user://modsettings.txt`
+- PC：`mod\modsettings.txt`；手机：`user://modsettings.txt`
 - **坑**：外置面板 `/set` 后要**主动 `ModSettings.Save()`**，否则重启丢失（历史事故）
 - **取证**：真机
 

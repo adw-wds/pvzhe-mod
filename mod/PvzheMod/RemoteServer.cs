@@ -376,6 +376,14 @@ namespace PvzheMod
                 if (path.StartsWith("/ping")) return "ok";
                 if (path.StartsWith("/status")) return BuildStatusBody();
                 if (path.StartsWith("/get")) return BuildGetBody();
+                // 功能开关变化事件（外置修改器轮询后弹 RTX 风格卡片提示）
+                if (path.StartsWith("/events"))
+                {
+                    var qe = ParseQuery(path);
+                    string since; qe.TryGetValue("since", out since);
+                    int n; int.TryParse(since, out n);
+                    return ChangeLog.BuildEventsBody(n);
+                }
                 if (path.StartsWith("/cmd"))
                 {
                     var qs = ParseQuery(path);
@@ -600,6 +608,18 @@ namespace PvzheMod
                         return CustomProjectManager.Remove(tp ?? "", pn ?? "");
                     }
                     if (name == "AutoLoadAll") return CustomProjectManager.AutoLoadAll();
+                    // Task 1 临时探针（验证通过后连同 ModZipProbe.cs 一起删）：?cmd?name=ModProbe&file=<zip 绝对路径>
+                    if (name == "ModProbe")
+                    {
+                        string fp; qs.TryGetValue("file", out fp);
+                        return Mod.ModZipProbe.Run(fp ?? "");
+                    }
+                    // 插件式 MOD 可行性探针：能否运行时加载一个新编译的程序集？?name=ModAsmProbe&file=<dll 绝对路径>
+                    if (name == "ModAsmProbe")
+                    {
+                        string fp; qs.TryGetValue("file", out fp);
+                        return Mod.ModAsmProbe.Run(fp ?? "");
+                    }
                     if (name == "CustomZombieLoad")
                     {
                         string file; qs.TryGetValue("file", out file);

@@ -5,13 +5,90 @@ namespace PvzheMod;
 /// <summary>
 /// 统一项目路由（子项目3）：plant/zombie/bullet/card 的 Load/List/Remove 统一分发。
 /// 目录约定：custom_projects\&lt;type&gt;\&lt;name&gt;\config.json；
-/// plant 兼容旧 custom_plants（存在则优先）。
+/// plant 兼容旧 CHANGE_ME_PROJECT_DIR\custom_plants（存在则优先）。
 /// AOT 纪律：禁 System.IO/Path/System.Text.Json；目录探测用 Godot.DirAccess（绝对路径）。
 /// </summary>
 public static class CustomProjectManager
 {
-    /// <summary>统一项目根目录（与 WPF 设计器约定一致）。</summary>
-    public const string BaseDir = "自定义项目";   // ★ 开源版占位：改成你自己的自定义项目目录（可用绝对路径）
+    /// <summary>
+    /// 老路径（开发机约定）。**只作为最后兜底** —— 玩家机器上这个目录通常不存在。
+    /// </summary>
+    public const string LegacyBaseDir = "CHANGE_ME_PROJECT_DIR";
+
+    /// <summary>内容根标记文件名：安装器发布二创内容时写在游戏主程序旁。</summary>
+    public const string RootMarkerName = "pvzmod_content.txt";
+
+    /// <summary>内容根目录名（游戏主程序旁）。</summary>
+    public const string RootFolderName = "PvzModContent";
+
+    static string _root;
+
+    /// <summary>
+    /// **内容根**（<c>custom_projects</c> 的父目录）。解析顺序（先命中先用）：
+    ///   ① 游戏主程序旁的 <c>pvzmod_content.txt</c> —— 安装器发布二创内容时写的一行绝对路径
+    ///   ② 游戏主程序旁的 <c>PvzModContent\</c>
+    ///   ③ 老路径 <c>CHANGE_ME_PROJECT_DIR</c>（兼容开发机与老流程）
+    ///
+    /// 【为什么必须动态解析】原来这里是**硬编码** <c>CHANGE_ME_PROJECT_DIR</c>：
+    /// 开发机上能跑，玩家机器上那目录不存在 → 二创植物永远加载不了，而且**没有任何报错**。
+    /// 探测全部失败时仍返回老路径（行为可预期、日志可查），不会抛异常。
+    /// </summary>
+    public static string BaseDir
+    {
+        get
+        {
+            if (_root == null) _root = ResolveRoot();
+            return _root;
+        }
+    }
+
+    static string ResolveRoot()
+    {
+        try
+        {
+            var exeDir = GetExeDir();
+            if (!string.IsNullOrEmpty(exeDir))
+            {
+                // ① 标记文件（安装器写的）
+                var marker = exeDir + "\\" + RootMarkerName;
+                if (Godot.FileAccess.FileExists(marker))
+                {
+                    try
+                    {
+                        var text = Godot.FileAccess.GetFileAsString(marker);
+                        if (text != null)
+                        {
+                            text = text.Replace("\r", "").Replace("\n", "").Trim();
+                            if (text.Length > 0 && text.IndexOf(':') == 1) return text.TrimEnd('\\', '/');
+                        }
+                    }
+                    catch { }
+                }
+
+                // ② 同目录下的 PvzModContent\
+                var beside = exeDir + "\\" + RootFolderName;
+                if (Godot.DirAccess.DirExistsAbsolute(beside)) return beside;
+            }
+        }
+        catch { }
+
+        // ③ 老路径兜底
+        return LegacyBaseDir;
+    }
+
+    /// <summary>游戏主程序所在目录（探测失败返回 null，调用方必须容错）。</summary>
+    static string GetExeDir()
+    {
+        try
+        {
+            var p = Godot.OS.GetExecutablePath();
+            if (string.IsNullOrEmpty(p)) return null;
+            p = p.Replace('/', '\\');
+            var i = p.LastIndexOf('\\');
+            return i > 0 ? p.Substring(0, i) : null;
+        }
+        catch { return null; }
+    }
 
     /// <summary>type → 项目根目录。plant 兼容旧 custom_plants（若存在）。</summary>
     public static string GetTypeDir(string type)
@@ -85,6 +162,10 @@ public static class CustomProjectManager
     public static string AutoLoadAll()
     {
         int ok = 0, fail = 0;
+        // 先把**解析出来的内容根**打出来：不打印的话，"0/0"既可能是"根对了但没项目"，
+        // 也可能是"根根本没解析到"—— 两种情况的排查方向完全相反，而日志里看不出区别。
+        Bootstrap.Log("自定义项目 内容根: " + BaseDir);
+
         var types = new[] { "plant", "zombie", "bullet", "card" };
         foreach (var type in types)
         {
@@ -98,7 +179,14 @@ public static class CustomProjectManager
                 var cfg = dir + "/" + dirs[i] + "/config.json";
                 if (!Godot.FileAccess.FileExists(cfg)) continue;
                 var r = Load(type, cfg);
-                if (r == "ok") ok++; else fail++;
+                if (r == "ok") ok++;
+                else
+                {
+                    fail++;
+                    // 失败必须带上**原因码**。只报"失败 1"等于没说：
+                    // err:no-file / err:bad-config / err:bad-template 三种原因的排查方向完全不同。
+                    Bootstrap.Log("自定义项目 加载失败: " + type + "/" + dirs[i] + " -> " + r);
+                }
             }
         }
         Bootstrap.Log("自定义项目 自动加载: 成功 " + ok + " 失败 " + fail);

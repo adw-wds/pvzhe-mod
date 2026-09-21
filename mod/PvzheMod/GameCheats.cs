@@ -1234,7 +1234,9 @@ namespace PvzheMod
         static bool _settingsLoaded;
         static bool _serverStarted;      // 外置修改器遥控服务已启动（首帧启动一次）
         static bool _onFrameErrorLogged;
-        static bool _autoLoadDone;       // 自定义项目自动加载已完成（首帧就绪一次性）
+        static bool _autoLoadDone;       // 自定义项目自动加载已完成（等游戏 config 就绪后一次性）
+        static int _autoLoadTimer;       // 就绪轮询节流（每 30 帧探一次，避免每帧开销）
+        static int _autoLoadWaits;       // 已等待次数（仅用于限制日志频率）
         public static void OnFrame(Node root)
         {
             try
@@ -1279,11 +1281,23 @@ namespace PvzheMod
                 // 图标分帧导出（制作器资源包，每帧处理几帧渲染）
                 if (_iconExporting) TickIconExport(root);
                 _consoleRoot = root;
-                // 自定义项目自动加载：首帧就绪一次性扫描 custom_projects 全部加载（Load 覆盖语义幂等）
-                if (!_autoLoadDone && root != null && GodotObject.IsInstanceValid(root))
+                // 自定义项目自动加载：**必须等游戏 config 系统就绪**再扫描 custom_projects。
+                // 首帧时 GetPacketIds 还是空的（游戏自己的 packet/config 库尚未建立），
+                // 此时任何模板 id 都查不到，会把所有自定义项目误判成"模板名不存在"。
+                // 所以这里用 GetPacketIds(true) 非空作为就绪判据——它正是模板解析依赖的能力，
+                // 探测它本身即"用得上才算就绪"，而不是猜某个时间点。未就绪则不置 _autoLoadDone，下帧再试。
+                if (!_autoLoadDone && root != null && GodotObject.IsInstanceValid(root) && ++_autoLoadTimer % 30 == 0)
                 {
-                    _autoLoadDone = true;
-                    try { CustomProjectManager.AutoLoadAll(); } catch { }
+                    int readyCount = -1;
+                    try { var readyIds = GetPacketIds(true); readyCount = readyIds == null ? -1 : readyIds.Count; } catch { }
+                    if (readyCount > 0)
+                    {
+                        _autoLoadDone = true;
+                        Bootstrap.Log("自定义项目 游戏 config 已就绪（可用 id 数=" + readyCount + "），开始扫描");
+                        try { CustomProjectManager.AutoLoadAll(); } catch (System.Exception ex) { Bootstrap.Log("自定义项目 自动加载异常: " + ex.Message); }
+                    }
+                    else if (_autoLoadWaits++ % 20 == 0)
+                        Bootstrap.Log("自定义项目 等待游戏 config 就绪…（可用 id 数=" + readyCount + "）");
                 }
                 // 游戏原生控制台（CommandManager）：主菜单/任意场景挂载开启（每 30 帧检测，切场景后重新挂）
                 if (ModSettings.ConsoleEnabled && ++_consoleTimer % 30 == 0) EnableConsole(root);
@@ -1712,11 +1726,118 @@ namespace PvzheMod
             }
         }
 
+        /// <summary>注册自定义植物的 packet 配置 + packet→角色名 映射（真二创闭环的第一环）。
+        /// 0.28 实测（ResourceManager 成员清单，2026-09-19）：packet 配置字典是属性 TOWERDEFENSE_PACKETS，
+        /// packet→角色名映射是字段 _characterNameByPacket；旧候选名 _packetConfigCache 等在本版本**全部不存在**。
+        /// ★ 为什么必须有角色名映射：游戏种下植物时先按 packet 取角色名，再用角色名去查
+        ///   TOWERDEFENSE_CHARCATERS 拿场景——映射指向自定义名，才能命中我们登记的自建场景。
+        /// 探测式，不抛；任一步命中即返回 true。</summary>
+        public static bool RegisterCustomPacket(string packetId, object cfg, string characterName)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(packetId) || cfg == null) return false;
+                var rm = GetRmInstance();
+                if (rm == null) { Bootstrap.Log("自定义植物 注册: ResourceManager 不可用"); return false; }
+                bool ok = false;
+
+                // ① packet 配置字典（0.28 新名优先，老名兜底）
+                foreach (var nm in new[] { "TOWERDEFENSE_PACKETS", "_packetConfigCache", "packetConfigs", "_packetConfigs", "PacketConfigs" })
+                {
+                    var d = RmMember(rm, nm) as System.Collections.IDictionary;
+                    if (d == null) continue;
+                    d[packetId] = cfg;
+                    Bootstrap.Log("自定义植物 注册: packet 配置字典命中 " + nm + "（" + packetId + "）");
+                    ok = true;
+                    break;
+                }
+                if (!ok) Bootstrap.Log("自定义植物 注册: packet 配置字典未命中（候选 TOWERDEFENSE_PACKETS 等）");
+
+                // ② packet → 角色名：真二创场景的键来源
+                if (!string.IsNullOrEmpty(characterName))
+                {
+                    var map = RmMember(rm, "_characterNameByPacket") as System.Collections.IDictionary;
+                    if (map != null)
+                    {
+                        map[packetId] = characterName;
+                        Bootstrap.Log("自定义植物 注册: 角色名映射命中 _characterNameByPacket（" + packetId + " → " + characterName + "）");
+                        ok = true;
+                    }
+                    else Bootstrap.Log("自定义植物 注册: 未找到 _characterNameByPacket，游戏仍会拿模板角色名");
+                }
+                return ok;
+            }
+            catch (System.Exception ex) { Bootstrap.Log("自定义植物 注册异常: " + ex.Message); return false; }
+        }
+
+        /// <summary>真二创自检：直接调用**游戏真正的** ResourceManager.GetCharacterScene(characterName)，
+        /// 看返回的到底是不是我们登记的那份自建场景（同一实例），以及ResourcePath。
+        /// 意义：GetCharacterScene 是纯字典查表（见上方注释），所以在注册完毕就能验证，
+        /// 不必等玩家进关卡种下植物。走的是游戏自己的代码路径（含已注入的 hook），不是模拟。</summary>
+        public static void SelfTestCustomScene(string characterName)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(characterName)) return;
+                var rm = GetRmInstance();
+                if (rm == null) { Bootstrap.Log("真二创自检: ResourceManager 不可用"); return; }
+                var m = rm.GetType().GetMethod("GetCharacterScene", new System.Type[] { typeof(string) });
+                if (m == null) { Bootstrap.Log("真二创自检: 找不到 GetCharacterScene(string)"); return; }
+
+                Godot.PackedScene expect;
+                bool has = CustomPlantManager.TryGetCustomScene(characterName, out expect);
+
+                object got = null;
+                string err = null;
+                try { got = m.Invoke(rm, new object[] { characterName }); }
+                catch (System.Exception ex)
+                {
+                    var inner = ex.InnerException ?? ex;
+                    err = inner.GetType().Name + ": " + inner.Message;
+                }
+
+                var res = got as Godot.Resource;
+                Bootstrap.Log("真二创自检: GetCharacterScene(\"" + characterName + "\") → "
+                            + (got == null ? "null" : got.GetType().Name)
+                            + " | 自建场景=" + (has ? "有" : "无")
+                            + " | 同一实例=" + (has && ReferenceEquals(got, expect) ? "是 ★✓" : "否")
+                            + " | ResourcePath=" + (res != null && !string.IsNullOrEmpty(res.ResourcePath) ? res.ResourcePath : "(空)")
+                            + (err != null ? " | 异常=" + err : ""));
+            }
+            catch (System.Exception ex) { Bootstrap.Log("真二创自检异常: " + ex.Message); }
+        }
+
         /// <summary>注入点②：GetCharacterScene(name) 开头调用——确保该角色真身已加载并写回字典。</summary>
         public static void EnsureCharacterSceneLoaded(string characterName)
         {
             try
             {
+                // ★★ 真二创：玩家自建场景优先 ★★
+                // GetCharacterScene 只会「查 TOWERDEFENSE_CHARCATERS 字典，查不到抛 KeyNotFoundException」，
+                // 本身不做加载。所以只要在它查字典【之前】把玩家的 PackedScene 塞进这个字典，
+                // 游戏种下的就是玩家自己的 Godot 场景——改数据、不改流程。
+                // 放在懒加载开关判断之前：懒加载已于 2026-09-13 回滚关闭，不能让它挡住真二创。
+                if (!string.IsNullOrEmpty(characterName) && CustomPlantManager.CustomSceneCount > 0)
+                {
+                    var rmc = GetRmInstance();
+                    var dictc = RmMember(rmc, "TOWERDEFENSE_CHARCATERS") as System.Collections.IDictionary;
+                    if (dictc != null)
+                    {
+                        Godot.PackedScene cs;
+                        if (CustomPlantManager.TryGetCustomScene(characterName, out cs))
+                        {
+                            dictc[characterName] = cs;
+                            if (CustomPlantManager.MarkSceneInjected(characterName))
+                                Bootstrap.Log("自定义植物 真二创: 自建场景已写入游戏字典 \"" + characterName + "\"");
+                        }
+                        else if (!dictc.Contains(characterName))
+                        {
+                            // 游戏要一个它自己字典里都没有的角色名 → 极可能就是我们的植物（名字对不上）
+                            CustomPlantManager.ProbeUnknownCharacter(characterName);
+                        }
+                    }
+                }
+
                 if (!_lazyCharOn || string.IsNullOrEmpty(characterName)) return;
                 if (!_lazyPending.Contains(characterName)) return;
                 string path;
@@ -10844,7 +10965,7 @@ namespace PvzheMod
         /// 关掉的原因：这几处抢时间窗口的写法会破坏所有关卡的选卡
         /// （用户反馈“有些关卡选不了卡”“选不了僵尸卡全部的关卡”）。
         /// 正确做法应该先把游戏自己的卡槽机制读清楚（源码在
-        /// 参考了某个第三方扩展 mod 的实现思路），再按它的机制实现 ——
+        /// 魔改版mod\魔改版源码\GDScript源码\scripts），再按它的机制实现 ——
         /// 而不是靠转储方法名猜哪个 API 能用。
         /// 关掉后至少不会再把原本能用的关卡选卡弄坏。</summary>
         const bool PvpCardExperiment = true;
