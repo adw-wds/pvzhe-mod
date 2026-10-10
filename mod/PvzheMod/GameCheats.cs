@@ -1417,7 +1417,7 @@ namespace PvzheMod
                 // 共享角色缓存（植物/僵尸，每 60 帧刷新）——所有功能共用，避免各自全树遍历
                 RefreshRoleCache(root);
                 // 炮类/投手一次发射多枚（数量可调，每 30 帧应用一次）
-                if (ModSettings.CannonMultiShot > 1 && ++_multiShotTimer % 30 == 0) ApplyCannonMultiShot();
+                // 炮类一次多发已并入 ApplyCannonNoCooldown 的统一遍历（旧实现在这里调 ApplyCannonMultiShot，已删）
                 // 全植物全图射程（每 60 帧应用一次）
                 if (ModSettings.PlantFullRange && ++_fullRangeTimer % 60 == 0) ApplyPlantFullRange();
                 // 无限水晶（每 2 秒检查，CrystalNum<10亿 才写档+保存）
@@ -1454,7 +1454,10 @@ namespace PvzheMod
                 if (ModSettings.VaseRandom && ++_vaseTimer % 20 == 0) AutoRandomizeVases(root);
                 // 卡槽卡牌随机 / 篡改（自动）：进关卡把底部种子卡槽/传送带槽里的卡替换成目标卡。
                 // SeedBankEveryFrame=true → 每帧尝试（1 帧 1 刷）；false → 每 10 帧。
-                if (ModSettings.SeedBankRandom && (ModSettings.SeedBankEveryFrame || ++_sbTimer % 10 == 0)) AutoRandomizeSeedBank(root);
+                // ★ D 组：AutoRandomizeSeedBank 内部已改成「每帧只刷 1 张卡（轮转指针）」，
+                //   所以这里不再需要 %10 节流——旧写法每 10 帧把整排卡一次性全刷，
+                //   那一帧内要做 N 次 Duplicate+Init+重建贴图，正是「太慢」的根源。
+                if (ModSettings.SeedBankRandom) AutoRandomizeSeedBank(root);
                 // 随机环境诊断（任一随机开关开启时每 10 秒报告一次当前罐子/卡槽数量，方便排查）
                 if ((ModSettings.VaseRandom || ModSettings.SeedBankRandom) && ++_rndDiagTimer >= 600)
                 {
@@ -1483,7 +1486,10 @@ namespace PvzheMod
                 if (false && ModSettings.GloveMode) ApplyGlove(root);   // 鼠标模拟已停用，改用游戏原生手套
                 // 魅惑植物/僵尸：每 5 帧从共享缓存遍历应用（内部按开关魅惑/还原，%10 分摊防卡顿）。
                 // 开关全关但场上还有残留魅惑角色（_charmedSet 非空）时也要跑 → 还原。
-                if ((ModSettings.CharmPlant || ModSettings.CharmZombie || _charmedSet.Count > 0) && ++_charmLoopTimer % 5 == 0)
+                // 魅惑 boss 光环（C 组）：每 30 帧重算一次「被魅惑僵王覆盖的僵尸」，
+                // 必须在 ApplyCharmFromCache 之前跑，后者才看得到最新的光环集合。
+                PropagateBossCharm();
+                if ((ModSettings.CharmPlant || ModSettings.CharmZombie || ModSettings.BossCharmAura || _bossAuraSet.Count > 0 || _charmedSet.Count > 0) && ++_charmLoopTimer % 5 == 0)
                     ApplyCharmFromCache();
                 // 禁止出僵尸：每 15 帧清理场上僵尸。
                 // ★ 联机镜像模式下只清【本地波次刷出来的】那一批，保留房主同步过来的真僵尸
@@ -1495,14 +1501,20 @@ namespace PvzheMod
                 //   它直接写 Global.TimeScale → Engine.TimeScale，跟 MOD 的 GameSpeed 是同一个量却互不知情，
                 //   只锁 MOD 那一侧拦不住玩家用游戏 UI 加速 → 两端时间流速不同 = 同步失败。
                 SyncNativeGameSpeed(root, NetSession.InRoom);
-                // 炮类无冷却：玉米加农炮/南瓜炮等 CannonComponent 装填清零（每 15 帧）
-                if (ModSettings.CannonNoCooldown && ++_cannonTimer % 15 == 0) ApplyCannonNoCooldown(root);
+                // 炮类（玉米加农炮等）统一处理：换炮弹 / 一次多发 / 无冷却。
+                // 三个功能共用一次场景树遍历，任一个开启就跑；每 5 帧一次（发射检测需要足够密度）。
+                if ((ModSettings.CannonNoCooldown || ModSettings.CannonMultiShot > 1
+                     || !string.IsNullOrEmpty(ModSettings.BulletType)) && ++_cannonTimer % 5 == 0)
+                    ApplyCannonNoCooldown(root);
                 // 无视僵尸进家：持续重置失败流程（僵尸进家不判失败，每 5 帧）
                 if (ModSettings.IgnoreHouse && ++_houseTimer % 5 == 0) ApplyIgnoreHouse(root);
                 // 僵尸碰到警戒线不失败：预置 _triggered=true 阻止 GameFail（每 5 帧）
                 if (ModSettings.IgnoreWarningLine && ++_warningTimer % 5 == 0) ApplyIgnoreWarningLine(root);
                 // 波次暂停：设官方 CommandManager.debugWavePaused（每帧保持，波次不推进）
                 if (ModSettings.WavePaused) ApplyWavePaused();
+                // ★ E 组：时停（PC 版按住 Shift）+ 无尽跳轮推进
+                TickTimeStop();
+                TickWaveJump();
                 // 刷怪倍数：波次变化时把 Spawn Num × 倍数（每 15 帧检查）
                 if (ModSettings.SpawnMultiplier > 1 && ++_spawnMultTimer % 15 == 0) ApplySpawnMultiplier();
                 // 强制关卡功能（强制迷雾/强制选卡）：在关卡 feature 创建前（_battleGraphReady=false 窗口）注入 featureData。
@@ -4805,6 +4817,89 @@ namespace PvzheMod
             return 5;
         }
 
+        /// <summary>
+        /// 获取地图实际列数（GetMapGridNum().X），失败默认 9。
+        ///
+        /// ★★ 为什么必须有它：刷全场的代码原来把列硬编码成 1..8，
+        ///   而实际关卡有 9 列 —— 最后一列永远刷不到；
+        ///   换到列数不同的自制关卡时偏差更大。行数早就有 GetMapRowCount 了，列数一直缺。
+        ///
+        /// 上限放到 60 是因为自制关卡可能比官方宽得多；
+        /// 超过这个值基本可以断定是反射拿到脏数据，此时退回默认值比乱刷安全。
+        /// </summary>
+        public static int GetMapColCount()
+        {
+            try
+            {
+                var tdm = GetTdmInstance();
+                if (tdm != null)
+                {
+                    var m = tdm.GetType().GetMethod("GetMapGridNum", Type.EmptyTypes);
+                    if (m != null && m.Invoke(tdm, null) is Vector2I v && v.X > 0 && v.X <= 60)
+                        return v.X;
+                }
+            }
+            catch { }
+            return 9;
+        }
+
+        /// <summary>刷物范围：单个格子 / 整行 / 整列 / 全屏。</summary>
+        public enum SpawnScope { Cell = 0, Row = 1, Column = 2, Field = 3 }
+
+        /// <summary>
+        /// 在指定范围刷指定卡。row/col 从 1 开始（与 GetMapGridPos 的约定一致）；
+        /// scope=Field 时忽略 row/col，用本关真实行列铺满。
+        ///
+        /// ★ 返回值是**成功生成的个数**：批量刷时部分格子被占/越界是常事，
+        ///   不应当成失败，所以让调用方拿到计数自己决定怎么提示。
+        /// ★ charm 必须一路传到 SpawnCharacter / SpawnPacketToScene ——
+        ///   原来的全场填充就是漏了这一层，导致「开了反水全场填充却不魅惑」。
+        /// </summary>
+        public static int SpawnRegion(string id, bool isZombie, bool charm,
+                                      int row, int col, SpawnScope scope)
+        {
+            int done = 0;
+            try
+            {
+                if (string.IsNullOrEmpty(id)) return 0;
+                int rows = GetMapRowCount();
+                int cols = GetMapColCount();
+                if (row < 1) row = 1;
+                if (col < 1) col = 1;
+                if (row > rows) row = rows;
+                if (col > cols) col = cols;
+
+                int x0, x1, y0, y1;
+                switch (scope)
+                {
+                    case SpawnScope.Row:    x0 = 1;        x1 = cols;    y0 = row;     y1 = row;      break;
+                    case SpawnScope.Column: x0 = col;      x1 = col;     y0 = 1;       y1 = rows;     break;
+                    case SpawnScope.Field:  x0 = 1;        x1 = cols;    y0 = 1;       y1 = rows;     break;
+                    default:                x0 = col;      x1 = col;     y0 = row;     y1 = row;      break;
+                }
+
+                for (int x = x0; x <= x1; x++)
+                    for (int y = y0; y <= y1; y++)
+                    {
+                        var grid = new Vector2I(x, y);
+                        // ★★ 植物和僵尸都走 SpawnCharacter（内部是 TowerDefensePacketConfig.Plant）——
+                        //    它才是「真的把角色种/放进场地」的那条路，而且对植物卡和僵尸卡都适用。
+                        //
+                        //    原来 isZombie=false 走的是 SpawnPacketToScene → TDM.SpawnPacket，
+                        //    那是【生成一张掉落卡牌】，不是实体 —— 所以选植物「刷实体」看起来
+                        //    永远没反应。用户反馈的「只有入槽/刷出能用、刷不出实体」就是这个。
+                        //    SpawnPacketToScene 保留不删（可能还有别的调用方），只是这里不再用它。
+                        bool ok = SpawnCharacter(id, grid, charm);
+                        if (ok) done++;
+                    }
+                Bootstrap.Log("刷区域: " + id + " scope=" + scope + " 行" + row + " 列" + col
+                              + " 地图" + cols + "x" + rows + " 魅力=" + charm
+                              + " 僵尸=" + isZombie + " 成功=" + done);
+            }
+            catch (System.Exception ex) { Bootstrap.Log("刷区域异常: " + ex.Message); }
+            return done;
+        }
+
         /// <summary>迷雾透视：隐藏 fogNode / FogBatch 节点（战斗迷雾）。</summary>
         static void ApplyFogESP(Node root)
         {
@@ -5658,6 +5753,124 @@ namespace PvzheMod
                 var f = cm.GetField("debugWavePaused", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
                 if (f != null && f.FieldType == typeof(bool) && !(bool)f.GetValue(inst))
                     f.SetValue(inst, true);
+            }
+            catch { }
+        }
+
+        // ===================== E 组：时停 =====================
+        static bool _timeStopOn;
+        static float _timeStopPrevScale = 1f;
+
+        /// <summary>是否手机版（Android/iOS）。时停快捷键只在 PC 版绑定。</summary>
+        public static bool IsMobilePlatform()
+        {
+            try { string n = OS.GetName(); return n == "Android" || n == "iOS"; }
+            catch { return false; }
+        }
+
+        public static bool IsTimeStopOn() { return _timeStopOn; }
+
+        /// <summary>时停开关：把 Engine.TimeScale 压到极小值。
+        ///
+        /// ★ 为什么是 0.0001 而不是 0：TimeScale=0 会让 Godot 派发的 delta 变成 0，
+        ///   游戏里任何对 delta 做倒数/归一化/除法的地方都会除零（表现为报错刷屏、波次计时器
+        ///   直接卡死），而且画面会彻底静止到连 MOD 面板都点不动。0.0001 视觉上等同静止，
+        ///   但不会触发除零，也不会把 UI 的输入处理一起冻住。
+        /// ★ 为什么不每帧强写：游戏侧只有 CommandManager「速度」页的滑块会写 Engine.TimeScale，
+        ///   而且只在拖动时写一次、不是每帧写。所以这里设一次就够；每帧强写反而会盖掉
+        ///   其它依赖时间倍率的机制（联机同步、GameSpeed 滑块等）。
+        /// ★ 记录原倍率再恢复：时停期间用户可能同时拖了速度滑块，这里只还原我们自己改的那一次。</summary>
+        public static void SetTimeStop(bool on)
+        {
+            try
+            {
+                if (on == _timeStopOn) return;
+                if (on)
+                {
+                    _timeStopPrevScale = (float)Engine.TimeScale;
+                    // 已经处于时停状态（倍率极小）时不要把 0.0001 记成"原倍率"，否则永远恢复不回来
+                    if (_timeStopPrevScale <= 0.01f) _timeStopPrevScale = 1f;
+                    Engine.TimeScale = 0.0001;
+                    _timeStopOn = true;
+                    Bootstrap.Log("时停: 开（原倍率 " + _timeStopPrevScale.ToString("0.##") + "）");
+                }
+                else
+                {
+                    Engine.TimeScale = _timeStopPrevScale;
+                    _timeStopOn = false;
+                    Bootstrap.Log("时停: 关（恢复 " + _timeStopPrevScale.ToString("0.##") + "）");
+                }
+            }
+            catch (System.Exception ex) { Bootstrap.Log("时停异常: " + ex.Message); }
+        }
+
+        /// <summary>每帧检查时停快捷键：PC 版按住 Shift 即停、松开自动恢复（按住式不用记状态）。
+        /// 手机版直接不绑定 —— 触屏没有 Shift，而且"按住才生效"这种操作会和拖拽种卡、
+        /// 多点触控缩放冲突，误触率极高。</summary>
+        static void TickTimeStop()
+        {
+            try
+            {
+                if (!ModSettings.TimeStopKeyEnabled) { if (_timeStopOn) SetTimeStop(false); return; }
+                if (IsMobilePlatform())
+                {
+                    if (_timeStopOn) SetTimeStop(false);   // 防跨平台存档带过来的残留状态
+                    return;
+                }
+                bool hold = Input.IsKeyPressed(Key.Shift);
+                if (hold != _timeStopOn) SetTimeStop(hold);
+            }
+            catch { }
+        }
+
+        // ===================== E 组：无尽跳轮 =====================
+        static int _waveJumpTarget = -1;
+        static int _waveJumpTimer;
+
+        /// <summary>读游戏当前波次号（拿不到返回 0）。字段名 currentWave 已在刷怪倍数里实测可用。</summary>
+        public static int GetCurrentWaveNo()
+        {
+            try
+            {
+                var wave = FindWaveFeature();
+                if (wave == null) return 0;
+                var cw = FindFieldVal(wave, "currentWave");
+                if (cw is int i) return i;
+                if (cw is double d) return (int)d;
+                if (cw is long l) return (int)l;
+            }
+            catch { }
+            return 0;
+        }
+
+        /// <summary>无尽模式：推进到指定轮数（用户在面板里自己输入目标轮数）。</summary>
+        public static void JumpToWaveTarget(int target)
+        {
+            if (target < 1) target = 1;
+            _waveJumpTarget = target;
+            Bootstrap.Log("无尽跳轮: 目标第 " + target + " 轮（当前 " + GetCurrentWaveNo() + "）");
+        }
+
+        public static int GetWaveJumpTarget() { return _waveJumpTarget; }
+        public static void CancelWaveJump() { _waveJumpTarget = -1; }
+
+        /// <summary>逐帧推进跳轮。每 12 帧（≈0.2 秒）推一波，而不是一帧内连跳十几波 ——
+        /// 一帧连跳会让波次配置来不及初始化，实测症状是刷怪表错位、甚至直接卡死。</summary>
+        static void TickWaveJump()
+        {
+            if (_waveJumpTarget <= 0) return;
+            if (++_waveJumpTimer % 12 != 0) return;
+            try
+            {
+                int cur = GetCurrentWaveNo();
+                if (cur <= 0) return;                     // 还没进战斗，等下一轮
+                if (cur >= _waveJumpTarget)
+                {
+                    Bootstrap.Log("无尽跳轮: 已到第 " + cur + " 轮，结束");
+                    _waveJumpTarget = -1;
+                    return;
+                }
+                SkipWave();                               // 官方 SkipToWave 命令：推进一波
             }
             catch { }
         }
@@ -7590,9 +7803,8 @@ namespace PvzheMod
         static bool _cacheDiagLogged, _bjFollowLogged, _orbitDiagLogged;
 
         /// <summary>刷新共享角色缓存（每 60 帧一次，或场景变化时）。战斗树巨大，全树遍历每 60 帧一次可接受。</summary>
-        static readonly System.Collections.Generic.Dictionary<Type, System.Reflection.PropertyInfo> _fireNumProps = new();
-        static readonly System.Collections.Generic.Dictionary<Type, System.Reflection.FieldInfo> _fireNumFields = new();
-        private static int _multiShotTimer;
+        // （旧的一炮多发依赖 fireNum 属性/字段，已确认 0.28 不存在，相关反射缓存一并移除）
+        // 现在多发走 _cannonBurstQueue + FireAt 补发，见 TryProcessCannon。
         private static int _fullRangeTimer;
         private static int _crystalTimer;
         private static int _spawnMultTimer;
@@ -7670,63 +7882,26 @@ namespace PvzheMod
             return done;
         }
 
-        /// <summary>刷全场自选卡：用指定卡 id 刷满全场（1-8 列 × 1-5 行）。isZombie=true 刷僵尸（SpawnCharacter），false 刷植物（SpawnPacketToScene）。</summary>
-        public static int SpawnAllFieldWith(string id, bool isZombie)
-        {
-            int done = 0;
-            try
-            {
-                if (string.IsNullOrEmpty(id)) return 0;
-                for (int x = 1; x <= 8; x++)
-                {
-                    for (int y = 1; y <= 5; y++)
-                    {
-                        var grid = new Vector2I(x, y);
-                        bool ok = isZombie ? SpawnCharacter(id, grid) : SpawnPacketToScene(id, grid);
-                        if (ok) done++;
-                    }
-                }
-                Bootstrap.Log("刷全场自选: " + id + (isZombie ? " 僵尸" : "") + " x" + done);
-            }
-            catch (System.Exception ex) { Bootstrap.Log("刷全场自选异常: " + ex.Message); }
-            return done;
-        }
+        /// <summary>刷全场自选卡：用指定卡 id 刷满全场。isZombie=true 刷僵尸（SpawnCharacter），false 刷植物（SpawnPacketToScene）。
+        /// ★ 行列改为**本关真实值**（原来硬编码 1-8 × 1-5，9 列关卡的最后一列永远刷不到）。</summary>
+        public static int SpawnAllFieldWith(string id, bool isZombie, bool charm = false)
+            => SpawnRegion(id, isZombie, charm, 1, 1, SpawnScope.Field);
 
         /// <summary>炮类一次发射多枚：把场上所有发射植物的 fireNum（发射数量）设为用户配置值。
         /// 覆盖玉米投手/卷心菜/西瓜/豌豆/喷菇/仙人掌等（原生支持 fireNum 的植物），反射缓存避免每帧开销。</summary>
-        static void ApplyCannonMultiShot()
-        {
-            try
-            {
-                int want = ModSettings.CannonMultiShot;
-                foreach (var n2 in _cachePlants)
-                {
-                    if (n2 == null || !GodotObject.IsInstanceValid(n2)) continue;
-                    var t = n2.GetType();
-                    if (!_fireNumProps.TryGetValue(t, out var pi))
-                    {
-                        pi = t.GetProperty("fireNum", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                        _fireNumProps[t] = pi;
-                        if (pi == null)
-                        {
-                            var fi = t.GetField("fireNum", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                            _fireNumFields[t] = fi;
-                        }
-                    }
-                    if (pi != null)
-                    {
-                        var cur = pi.GetValue(n2);
-                        if (cur is int ci && ci != want) pi.SetValue(n2, want);
-                    }
-                    else if (_fireNumFields.TryGetValue(t, out var fi) && fi != null)
-                    {
-                        var cur = fi.GetValue(n2);
-                        if (cur is int ci && ci != want) fi.SetValue(n2, want);
-                    }
-                }
-            }
-            catch { }
-        }
+        // ── 炮类一次多发（2026-09-24 重写）──────────────────────────────
+        // ★★ 旧实现在这里遍历 _cachePlants 去设 "fireNum" 属性/字段。用 Mono.Cecil dump 主程序集
+        //    确认过：TowerDefensePlant / TowerDefenseCharacter / AttackComponent / CannonComponent
+        //    **全都没有 fireNum**（那是 0.26 时代的名字，0.28 已经不存在）。
+        //    所以那个开关从上线起就没生效过 —— 这正是「一炮多发没用」的原因。
+        //
+        // 真正能用的做法：炮一次开火只产一颗炮弹（CannonComponent.FireAt → TryFireMarkerProjectile），
+        // 天生没有「一次多颗」的开关，想多发只能【让它再开火几次】。所以：
+        //   ① 轮询检测「刚发射」：炮发射时会 StartRestTimer(restTime)，把 _restTimerRemaining
+        //      设回 restTime；它在冷却期间是单调递减的，所以「突然变大」就是刚开了一炮的信号。
+        //   ② 把这个炮排进补发队列，随后每帧补一发 FireAt(targetPos)，直到补足 N 发。
+        //   ③ 补发前把 _restTimerRemaining 清 0，否则游戏因为还在 Rest 而拒绝发射。
+        // 发射检测必须发生在清冷却之前（TryProcessCannon 里的顺序就是这样）。
 
         static void RefreshRoleCache(Node root)
         {
@@ -7740,7 +7915,123 @@ namespace PvzheMod
                 WalkRoleCache(start);
             }
             catch { }
+            // ★★ 掉落检测必须挂在这里：缓存刚刷新的那一瞬是唯一能可靠对比
+            //   “上一轮见过 vs 这一轮还在”的时机。放到主循环里按帧调是没用的 ——
+            //   缓存本身 60 帧才重建一次，中间那些帧看到的还是同一份快照。
+            try { ApplyDrops(); } catch { }
             if (!_cacheDiagLogged) { _cacheDiagLogged = true; Bootstrap.Log("角色缓存: 植物=" + _cachePlants.Count + " 僵尸=" + _cacheZombies.Count); }
+        }
+
+        // ═══════════════ 掉落卡牌（2026-09-24 B 组） ═══════════════
+        //
+        // 判据是“从角色缓存消失”。
+        // ★★ 为什么不挂 Die 而是用差分：PvzheMod 用的是 patcher 的**内置补丁表**，
+        //   临时加一个 IL 钩子要改 patcher 并重新验证整套注入，风险和工作量大得多；
+        //   而“实体从缓存里没了”这个信号现有代码本来就在用
+        //   （ApplyCombatMods 靠它清理 _zombieLockPos），说明它足够可靠。
+        //   代价：最坏有 1 秒延迟（缓存 60 帧重建一次），对掉落来说完全可以接受。
+        static readonly System.Collections.Generic.Dictionary<ulong, Vector2> _dropSeenZombie = new();
+        static readonly System.Collections.Generic.Dictionary<ulong, Vector2> _dropSeenPlant = new();
+        static int _dropLogged;
+
+        static void ApplyDrops()
+        {
+            DiffDrops(_cacheZombies, _dropSeenZombie, ModSettings.ZombieDropCard,
+                      ModSettings.ZombieDropId, ModSettings.ZombieDropCount, "僵尸");
+            DiffDrops(_cachePlants, _dropSeenPlant, ModSettings.PlantDropCard,
+                      ModSettings.PlantDropId, ModSettings.PlantDropCount, "植物");
+        }
+
+        static void DiffDrops(System.Collections.Generic.List<Node2D> alive,
+                              System.Collections.Generic.Dictionary<ulong, Vector2> seen,
+                              bool on, string cfgId, int count, string what)
+        {
+            try
+            {
+                var now = new System.Collections.Generic.Dictionary<ulong, Vector2>();
+                for (int i = 0; i < alive.Count; i++)
+                {
+                    var n = alive[i];
+                    if (n == null || !GodotObject.IsInstanceValid(n)) continue;
+                    try { now[n.GetInstanceId()] = n.GlobalPosition; } catch { }
+                }
+
+                // 只在开关打开时掉落；关闭时仍然要维护 seen，
+                // 否则“关掉又打开”会把关闭期间死掉的一批一次性全补掉落。
+                if (on && count > 0)
+                {
+                    foreach (var kv in seen)
+                    {
+                        if (now.ContainsKey(kv.Key)) continue;   // 还活着
+                        DropCardsAt(kv.Value, cfgId, count, what);
+                    }
+                }
+                seen.Clear();
+                foreach (var kv in now) seen[kv.Key] = kv.Value;
+            }
+            catch (System.Exception ex) { Bootstrap.Log("掉落差分异常(" + what + "): " + ex.Message); }
+        }
+
+        /// <summary>在世界坐标处掉 count 张卡（cfgId 空则每张都随机）。</summary>
+        static void DropCardsAt(Vector2 world, string cfgId, int count, string what)
+        {
+            try
+            {
+                var grid = WorldToNearGrid(world);
+                if (grid.X < 1 || grid.Y < 1) return;
+                int done = 0;
+                for (int i = 0; i < count; i++)
+                {
+                    string id = string.IsNullOrWhiteSpace(cfgId) ? RandomPacketId() : cfgId;
+                    if (string.IsNullOrEmpty(id)) continue;
+                    if (SpawnPacketToScene(id, grid, false)) done++;
+                }
+                if (_dropLogged < 20)
+                {
+                    _dropLogged++;
+                    Bootstrap.Log("掉落(" + what + "): 位置=" + grid + " 要=" + count + " 实=" + done
+                                  + " 卡=" + (string.IsNullOrWhiteSpace(cfgId) ? "随机" : cfgId));
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>世界坐标 → 最近的合法格子。
+        /// ★ 遍历本关所有格子取最近，而不是“扫世界坐标反推”——反推要扫一大片且谓词不单调
+        ///   （见 NetGridToWorld 的注释），本作最多也就几十个格子，遍历一次很便宜。
+        /// ★ 只在掉落时调用（不是每帧），所以不用担心反射开销。</summary>
+        static Vector2I WorldToNearGrid(Vector2 world)
+        {
+            try
+            {
+                int cols = GetMapColCount(), rows = GetMapRowCount();
+                int bx = 1, by = 1;
+                float bd = float.MaxValue;
+                bool found = false;
+                for (int x = 1; x <= cols; x++)
+                    for (int y = 1; y <= rows; y++)
+                    {
+                        var w = NetGridToWorld(new Vector2I(x, y));
+                        if (w.X < -1e6f) continue;          // 非法格子
+                        float d = (w - world).LengthSquared();
+                        if (d < bd) { bd = d; bx = x; by = y; found = true; }
+                    }
+                return found ? new Vector2I(bx, by) : new Vector2I(0, 0);
+            }
+            catch { return new Vector2I(0, 0); }
+        }
+
+        /// <summary>从当前分类的卡牌列表里随机取一个 ID（掉落留空时用）。</summary>
+        static string RandomPacketId()
+        {
+            try
+            {
+                // 掉落默认随机植物卡（僵尸卡刷成“实物”容易把场面搞爆）
+                var ids = GetPacketIds(true);
+                if (ids == null || ids.Count == 0) return null;
+                return ids[GD.RandRange(0, ids.Count - 1)];
+            }
+            catch { return null; }
         }
 
         static void WalkRoleCache(Node node)
@@ -8077,36 +8368,50 @@ namespace PvzheMod
                 int count = 0;
                 foreach (var _ in en) count++;
                 if (count == 0) { _sbDone = false; _lastSbCount = 0; return; }
-                if (count > _lastSbCount) { _lastSbCount = count; _sbDone = false; }   // 新卡出现 → 重新处理
+                if (count > _lastSbCount) { _lastSbCount = count; _sbDone = false; _sbCursor = 0; }   // 新卡出现 → 重新处理
                 // 篡改模式（有目标池）优先：用用户指定的植物/僵尸池；否则纯随机（植物或僵尸全池）
                 var target = TrickPoolIds();
                 bool useTrick = target.Count > 0;
                 if (!useTrick)
                 {
-                    // 纯随机模式节流：成功后按节奏重刷（SeedBankEveryFrame=true → 1 帧 1 刷）
-                    if (_sbDone)
-                    {
-                        int gap = ModSettings.SeedBankEveryFrame ? 1 : 10;
-                        if (++_sbRetryTimer < gap) return;
-                        _sbDone = false;
-                        _sbRetryTimer = 0;
-                    }
                     target = ModSettings.SeedBankRandomZombie ? GetPacketIds(false) : GetPacketIds(true);
                     if (target.Count == 0) { Bootstrap.Log("卡槽随机: 无卡池（" + (ModSettings.SeedBankRandomZombie ? "僵尸" : "植物") + "）"); return; }
                 }
-                var rnd = new Random();
+                // 收集场景里的卡（引用列表）。每帧重建，但只是装箱引用，远比下面那串反射便宜。
+                var list = new System.Collections.Generic.List<object>();
+                foreach (var p in en) list.Add(p);
+                if (list.Count == 0) return;
+
+                // ★ D 组优化：纯随机模式每帧只刷 1 张（轮转指针），把每帧开销从 O(N) 降到 O(1)。
+                //   旧写法是「每 10 帧把整排卡全刷一遍」：那一帧内要做 N 次 Duplicate+Init+重建贴图
+                //   （N≈10 时就是一帧 40+ 次反射调用）→ 明显掉帧；而且整排卡同时跳变，看着像闪屏。
+                //   轮转后每帧只动一张，视觉上是连续流动的，也不再掉帧。
+                //   篡改模式仍必须全刷：要保证每一张卡都落在目标池里，不能漏。
+                System.Collections.Generic.List<object> batch;
+                if (useTrick) batch = list;
+                else
+                {
+                    if (_sbCursor >= list.Count) _sbCursor = 0;
+                    batch = new System.Collections.Generic.List<object> { list[_sbCursor] };
+                    _sbCursor = (_sbCursor + 1) % list.Count;
+                }
+
                 int changed = 0;
                 int failed = 0;
-                foreach (var packetShow in en)
+                foreach (var packetShow in batch)
                 {
                     if (packetShow == null || !GodotObject.IsInstanceValid((GodotObject)packetShow)) { failed++; continue; }
                     // 跳过正在选中/使用的卡（select=true，玩家正在拖/拿的卡不刷新 → 种下的是卡上显示的那张）
-                    try
+                    // D 组：SeedBankHandRandom 开则连手上拿着的卡也一起变（用户要求「手上也随机变」）
+                    if (!ModSettings.SeedBankHandRandom)
                     {
-                        var sel = FindPropOrFieldVal(packetShow, "select");
-                        if (sel is bool sl && sl) continue;
+                        try
+                        {
+                            var sel = FindPropOrFieldVal(packetShow, "select");
+                            if (sel is bool sl && sl) continue;
+                        }
+                        catch { }
                     }
-                    catch { }
                     // 篡改模式：已符合目标池的卡不重复刷（避免每帧闪）
                     if (useTrick)
                     {
@@ -8115,7 +8420,7 @@ namespace PvzheMod
                         if (curKey != null && target.Contains(curKey)) continue;
                     }
                     // 抽一张目标卡：固定模式=第 1 张；随机模式=池内随机
-                    string id = (ModSettings.TrickFixedOnly && useTrick) ? target[0] : target[rnd.Next(target.Count)];
+                    string id = (ModSettings.TrickFixedOnly && useTrick) ? target[0] : target[_rndSb.Next(target.Count)];
                     var cfg = GetConfig(id);
                     if (cfg == null) { failed++; continue; }
                     object dup = null;
@@ -8141,8 +8446,22 @@ namespace PvzheMod
                     if (key == id) changed++;
                     else { failed++; Bootstrap.Log("卡槽随机: 卡未生效 期望=" + id + " 实际=" + key); }
                 }
-                if (changed == 0 && !useTrick) { _sbDone = false; _lastSbCount = 0; Bootstrap.Log("卡槽随机: 全部失败，稍后重试 (失败 " + failed + ")"); }
-                else { _sbDone = true; _sbRetryTimer = 0; if (changed > 0) Bootstrap.Log("卡槽随机: 成功 " + changed + " 失败 " + failed + (useTrick ? " 张(目标池)" : " 张")); }
+                // 日志不再每帧打：轮转模式累计到走完一轮（指针回到 0）时报一次
+                if (useTrick)
+                {
+                    _sbDone = true;
+                    if (changed > 0) Bootstrap.Log("卡槽随机: 成功 " + changed + " 失败 " + failed + " 张(目标池)");
+                }
+                else
+                {
+                    _sbDone = true;
+                    _sbRoundChanged += changed;
+                    if (_sbCursor == 0)
+                    {
+                        if (_sbRoundChanged > 0) Bootstrap.Log("卡槽随机: 一轮 " + list.Count + " 张，成功 " + _sbRoundChanged + " 失败 " + failed);
+                        _sbRoundChanged = 0;
+                    }
+                }
             }
             catch (System.Exception ex) { Bootstrap.Log("卡槽随机异常: " + ex.Message); }
         }
@@ -8711,13 +9030,16 @@ namespace PvzheMod
             SetPropOrField(vaseNode, "packetName", id);
         }
 
-        /// <summary>砸罐子瞬间回调（由 patcher 注入 VaseContentComponent.DestroySet 开头）：
-        /// 每次砸罐子前重新随机该罐子内容 → 每次砸都随机（无名版随机罐子效果）。</summary>
+        /// <summary>砸罐子瞬间回调（由 patcher 注入 VaseContentComponent.DestroySet 开头）。
+        /// ★ D 组：默认【不】在这里重抽，罐子内容在生成时就固定好了 —— 隔着罐子/透视看到的
+        /// 就是砸出来那张，玩家可以据此选罐，也不会出现「看着是这个砸出来是那个」。
+        /// 想要旧行为（每砸一次就重抽）把 ModSettings.VaseRerollOnBreak 打开。</summary>
         public static void OnVaseAboutToBreak(object comp)
         {
             try
             {
                 if (!ModSettings.VaseRandom) return;
+                if (!ModSettings.VaseRerollOnBreak) return;
                 if (comp == null) return;
                 var vase = FindFieldVal(comp, "parent");   // VaseContentComponent.parent = TowerDefenseVase
                 if (vase == null) return;
@@ -9755,7 +10077,10 @@ namespace PvzheMod
                         catch { }
                     }
                 }
-                return true;
+                // ★ 返回真实结果：Plant 返回 null 就是没种下去（格子被占/越界/放置检查不过）。
+                //   旧代码无条件 return true，导致刷区域计数偏大 —— UI 上写着「成功 5」
+                //   而场上只多了 2 个，反而更难排查。
+                return ret != null;
             }
             catch (System.Exception ex) { Bootstrap.Log("刷实物异常: " + ex.Message); return false; }
         }
@@ -10594,6 +10919,67 @@ namespace PvzheMod
         /// 攻击敌我判断用 camp！所以魅惑 = 反转 camp（植物→ZOMBIE，僵尸→PLANT）；
         /// 用 instanceId 集合记录已反转的角色，关闭开关时自动还原。</summary>
         static readonly System.Collections.Generic.HashSet<ulong> _charmedSet = new System.Collections.Generic.HashSet<ulong>();
+
+        /// <summary>取角色的 instance 唯一 id（拿不到返回 0）。魅惑逻辑用它做集合键。</summary>
+        static ulong NodeIdOf(Node2D n2)
+        {
+            try
+            {
+                var inst = FindFieldVal(n2, "instance");
+                if (inst == null || !GodotObject.IsInstanceValid((GodotObject)inst)) return 0;
+                return ((GodotObject)inst).GetInstanceId();
+            }
+            catch { return 0; }
+        }
+
+        // ── 魅惑 boss 光环（C 组）────────────────────────────────────────
+        // 僵王被魅惑后，把它身边的敌方僵尸一起拉成魅惑（它们本来就是它的手下）。
+        // 每 30 帧重算一次 _bossAuraSet，ApplyCharmPatch 再按这个集合决定要不要魅惑。
+        // 注意：光环只是“标记”，真正的魅惑动作仍然走 ApplyCharmPatch，避免两套魅惑代码分叉。
+        static readonly System.Collections.Generic.HashSet<ulong> _bossAuraSet = new System.Collections.Generic.HashSet<ulong>();
+        static int _bossAuraTimer;
+        static bool _bossAuraLogged;
+
+        /// <summary>重算「被魅惑 boss 光环覆盖的僵尸」。开销很低：每 30 帧一次，只扫两趟僵尸缓存。</summary>
+        static void PropagateBossCharm()
+        {
+            if (++_bossAuraTimer % 30 != 0) return;
+            try
+            {
+                // 先清空：这样关掉开关、或场上没有魅惑僵王时，光环会自动失效
+                _bossAuraSet.Clear();
+                if (!ModSettings.BossCharmAura) return;
+                float r = ModSettings.BossCharmRadius * 80f;   // 格 → 像素（PC 版格宽约 80）
+                if (r <= 0f) return;
+                // ① 找「已魅惑的僵王」的坐标
+                var bosses = new System.Collections.Generic.List<Vector2>();
+                foreach (var n2 in _cacheZombies)
+                {
+                    if (n2 == null || !GodotObject.IsInstanceValid(n2)) continue;
+                    if (!IsTypeOf(n2, "TowerDefenseZombieBoss")) continue;
+                    ulong bid = NodeIdOf(n2);
+                    if (bid == 0 || !_charmedSet.Contains(bid)) continue;
+                    bosses.Add(n2.GlobalPosition);
+                }
+                if (bosses.Count == 0) return;
+                // ② 把半径内的僵尸记进光环集合（不在这里动手，交给 ApplyCharmPatch 统一魅惑）
+                foreach (var n2 in _cacheZombies)
+                {
+                    if (n2 == null || !GodotObject.IsInstanceValid(n2)) continue;
+                    ulong id = NodeIdOf(n2);
+                    if (id == 0 || _charmedSet.Contains(id)) continue;
+                    var p = n2.GlobalPosition;
+                    for (int i = 0; i < bosses.Count; i++)
+                        if (p.DistanceTo(bosses[i]) <= r) { _bossAuraSet.Add(id); break; }
+                }
+                if (_bossAuraSet.Count > 0 && !_bossAuraLogged)
+                {
+                    _bossAuraLogged = true;
+                    Bootstrap.Log("BOSS魅惑光环: 覆盖 " + _bossAuraSet.Count + " 个僵尸 半径=" + r);
+                }
+            }
+            catch { }
+        }
         static readonly System.Collections.Generic.Dictionary<ulong, float> _charmFacing = new System.Collections.Generic.Dictionary<ulong, float>();   // 魅惑目标朝向符号（1=朝右 -1=朝左），持续保持防游戏改回
         static bool _charmDiagLogged;
         static bool _charmCallLogged;
@@ -10642,6 +11028,11 @@ namespace PvzheMod
         static int _sbTimer;
         static bool _sbDone;
         static int _lastSbCount;
+        // ★ D 组：卡槽随机改成「每帧只刷 1 张（轮转）」，这几个是它的状态。
+        //   _rndSb 提到静态是为了不再每次调用 new Random()（旧代码每帧新建一个，浪费且种子退化）。
+        static readonly Random _rndSb = new Random();
+        static int _sbCursor;          // 轮转指针：下一次该刷 packetList 里的第几张
+        static int _sbRoundChanged;    // 本轮累计成功张数（走完一轮才打日志，避免刷屏）
         static int _sbRetryTimer;   // 成功后定时重新随机（保持卡槽一直随机状态）
         static int _rndDiagTimer;
 
@@ -10659,9 +11050,8 @@ namespace PvzheMod
                 }
                 if (++_charmTick % 10 != 0) return;
                 if (!(character is Node2D n2)) return;
-                var inst = FindFieldVal(character, "instance");
-                if (inst == null || !GodotObject.IsInstanceValid((GodotObject)inst)) return;
-                ulong id = ((GodotObject)inst).GetInstanceId();
+                ulong id = NodeIdOf(n2);
+                if (id == 0) return;
                 bool isPlant = IsTypeOf(n2, "TowerDefensePlant");
                 bool isZombie = IsTypeOf(n2, "TowerDefenseZombie");
                 bool isBoss = IsTypeOf(n2, "TowerDefenseZombieBoss");   // 僵王（Hypnoses 可能免疫，需额外强制改阵营）
@@ -10673,7 +11063,9 @@ namespace PvzheMod
                     Bootstrap.Log("魅惑诊断: type=" + n2.GetType().Name + " isPlant=" + isPlant + " isZombie=" + isZombie + " 植开关=" + ModSettings.CharmPlant + " 僵开关=" + ModSettings.CharmZombie);
                 }
                 if (!isPlant && !isZombie) return;
-                bool wantCharm = (isPlant && ModSettings.CharmPlant) || (isZombie && ModSettings.CharmZombie);
+                // boss 光环里的僵尸：即使没开「魅惑僵尸」开关也要魅惑（光环是独立功能）
+                bool inAura = isZombie && _bossAuraSet.Contains(id);
+                bool wantCharm = (isPlant && ModSettings.CharmPlant) || (isZombie && (ModSettings.CharmZombie || inAura));
                 bool already = _charmedSet.Contains(id);
                 if (wantCharm && !already)
                 {
@@ -11708,66 +12100,161 @@ namespace PvzheMod
         }
 
         /// <summary>炮类无冷却：玉米加农炮/南瓜炮等 CannonComponent 装填清零（restTime/剩余计时/_canFire）。</summary>
+        // ── 炮类统一处理（2026-09-24 重写）：换炮弹 / 一次多发 / 无冷却 ──────────
+        //
+        // ★★ 为什么不再走场景树：旧实现每轮 Node.GetChildren(true) 递归整棵场景树，
+        //    炮本身只占其中几个节点，性价比极低（而且频率拉到 5 帧后就明显卡了）。
+        //    植物缓存 _cachePlants 里已经有炮节点，直接用它。
+        //    代价：新种下的炮最多等一个缓存周期（~1 秒）才被处理，对这三种功能无所谓。
+        //
+        // ★★ 发射检测与清冷却的先后顺序不能反：
+        //    TryProcessCannon 里先读 _restTimerRemaining 判断「是不是刚发射」，再清冷却。
+        //    反过来的话刚发射那一下的 restTime 会被当场抹掉，永远检测不到发射。
+        static readonly System.Collections.Generic.Dictionary<Type, System.Reflection.FieldInfo[]> _cannonFieldCache = new();
+        static readonly System.Collections.Generic.Dictionary<ulong, double> _cannonPrevRemain = new();
+        static readonly System.Collections.Generic.List<object> _cannonBurstQueue = new();
+        static int _cannonProjLog;
+        static int _cannonBurstLog;
+
         static void ApplyCannonNoCooldown(Node root)
         {
             int count = 0;
-            var tree = root.GetTree();
-            Node start = tree != null && tree.Root != null ? tree.Root : root;
-            CannonWalk(start, ref count);
-            if (++_cannonLogTimer >= 120) { _cannonLogTimer = 0; Bootstrap.Log("炮类无冷却: 炮=" + count); }
-        }
-
-        static void CannonWalk(Node node, ref int count)
-        {
-            foreach (var child in node.GetChildren(true))
+            foreach (var n2 in _cachePlants)
             {
-                try
-                {
-                    if (TrySetCannonCooldown(child)) count++;
-                }
-                catch { }
-                CannonWalk(child, ref count);
+                if (n2 == null || !GodotObject.IsInstanceValid(n2)) continue;
+                try { if (TryProcessCannon(n2)) count++; } catch { }
+            }
+            FlushCannonBurst();
+            if (++_cannonLogTimer >= 240)
+            {
+                _cannonLogTimer = 0;
+                Bootstrap.Log("炮类: 炮=" + count + " 无冷却=" + ModSettings.CannonNoCooldown
+                    + " 多发=" + ModSettings.CannonMultiShot + " 换弹=" + (ModSettings.BulletType ?? ""));
             }
         }
 
-        static bool TrySetCannonCooldown(object obj)
+        /// <summary>对一个炮节点做三件事，返回是否命中一个炮。
+        /// ① 发射检测（供多发用）② 换炮弹 ③ 无冷却。</summary>
+        static bool TryProcessCannon(object obj)
         {
             try
             {
                 var cc = FindFieldVal(obj, "_cannonComponent");
                 if (cc == null) return false;
+                if (cc is GodotObject g0 && !GodotObject.IsInstanceValid(g0)) return false;
                 var t = cc.GetType();
-                // 关键：调用游戏原生 StopRestTimer()（= _restTimerRunning=false + _restTimerRemaining=0），
-                // 正确结束冷却状态机（只改字段不清计时器会导致炮卡在 Rest 状态点不动/无法开炮）
-                var stopM = t.GetMethod("StopRestTimer", Type.EmptyTypes);
-                if (stopM != null) { try { stopM.Invoke(cc, null); } catch { } }
-                // restTime 属性（TowerDefensePlantCobCannon.restTime 会同步到组件）
-                var rp = t.GetProperty("restTime", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (rp != null && rp.PropertyType == typeof(double))
+                if (!_cannonFieldCache.TryGetValue(t, out var fs))
                 {
-                    var setter = rp.GetSetMethod(true);
-                    if (setter != null) setter.Invoke(cc, new object[] { 0.0 });
+                    fs = new System.Reflection.FieldInfo[]
+                    {
+                        t.GetField("_restTimerRunning", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
+                        t.GetField("_restTimerRemaining", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
+                        t.GetField("restTime", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
+                        t.GetField("projectileData", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
+                    };
+                    _cannonFieldCache[t] = fs;
                 }
-                // restTime 字段兜底
-                var rf = t.GetField("restTime", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (rf != null && rf.FieldType == typeof(double)) rf.SetValue(cc, 0.0);
-                // 剩余装填计时清零（兜底）
-                var rr = t.GetField("_restTimerRemaining", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (rr != null && rr.FieldType == typeof(double)) rr.SetValue(cc, 0.0);
-                // 计时器状态：停止 + 取消暂停（防冷却状态机卡死）
-                var run = t.GetField("_restTimerRunning", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (run != null && run.FieldType == typeof(bool)) run.SetValue(cc, false);
-                var paused = t.GetField("_restTimerPaused", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (paused != null && paused.FieldType == typeof(bool)) paused.SetValue(cc, false);
-                var pend = t.GetField("_pendingRestTimeout", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (pend != null && pend.FieldType == typeof(bool)) pend.SetValue(cc, false);
-                // 允许发射
-                var cf = t.GetField("_canFire", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (cf != null && cf.FieldType == typeof(bool)) cf.SetValue(cc, true);
+                var runF = fs[0]; var remF = fs[1]; var restF = fs[2]; var pdF = fs[3];
+                if (runF == null || remF == null) return false;
+
+                bool running = runF.GetValue(cc) is bool rb && rb;
+                double remaining = remF.GetValue(cc) is double rd ? rd : 0.0;
+                double restTime = (restF != null && restF.GetValue(cc) is double rt) ? rt : 0.0;
+                ulong cid = cc is GodotObject go ? go.GetInstanceId() : 0UL;
+
+                // ① 发射检测：冷却期间 _restTimerRemaining 是单调递减的，突然变大 =
+                //    游戏刚调过 StartRestTimer(restTime) = 刚开了一炮。
+                bool justFired = false;
+                if (cid != 0 && running && restTime > 0.01)
+                {
+                    if (_cannonPrevRemain.TryGetValue(cid, out var prev)
+                        && remaining > prev + 0.02 && remaining >= restTime * 0.8)
+                        justFired = true;
+                    _cannonPrevRemain[cid] = remaining;
+                }
+
+                // ② 换炮弹（用户选了自定义子弹类型时生效）
+                TryOverrideCannonProjectile(cc, pdF);
+
+                // ③ 多发：刚开火 → 排队补发 N-1 发（统一在遍历结束后消费，避免边遍历边改状态）
+                if (justFired && ModSettings.CannonMultiShot > 1)
+                {
+                    int extra = ModSettings.CannonMultiShot - 1;
+                    for (int i = 0; i < extra; i++) _cannonBurstQueue.Add(cc);
+                    if (_cannonBurstLog++ % 20 == 0) Bootstrap.Log("炮类多发: 补发 " + extra + " 发");
+                }
+
+                // ④ 无冷却（必须放最后，见上面 ★★）
+                if (ModSettings.CannonNoCooldown && running && remaining > 0.0)
+                    remF.SetValue(cc, 0.0);
+
                 return true;
             }
             catch { }
             return false;
+        }
+
+        /// <summary>把炮自己的炮弹换成用户选的子弹类型。
+        ///
+        /// ★★ 为什么「子弹类型修改」对炮不生效：那个功能改的是【已经在飞的子弹】的 config
+        ///    （BulletField._data 里的活动子弹），而炮的炮弹是开火那一刻才用
+        ///    CannonComponent.projectileData 现场 BuildConfig() 出来的 —— 两边根本不是同一个东西。
+        ///    这正是「选了寒冰炮弹、炮里还是普通炮弹」的原因。
+        ///
+        /// 正确入口就是 projectileData：看 ApplyDefinitionOnce 的 IL，它是
+        ///     Definition.projectileData.Duplicate()
+        /// 即每个炮组件自己一份副本，改它不会波及别的炮（包括僵尸的炮）。
+        /// 又因为 BuildConfig() 会把结果缓存进 _cachedConfig，改完 projectileName
+        /// 必须调 InvalidateConfigCache()，否则依然用旧炮弹。
+        /// 另外 _configured 保证 ApplyDefinitionOnce 只跑一次，不会把我们改的值盖回去。</summary>
+        static void TryOverrideCannonProjectile(object cc, System.Reflection.FieldInfo pdF)
+        {
+            try
+            {
+                var want = ModSettings.BulletType;
+                if (string.IsNullOrEmpty(want)) return;
+                if (pdF == null) return;
+                var pd = pdF.GetValue(cc);
+                if (pd == null) return;
+                var pt = pd.GetType();
+                var nameF = pt.GetField("projectileName", BindingFlags.Public | BindingFlags.Instance);
+                if (nameF == null) return;
+                var cur = nameF.GetValue(pd);
+                string curS = cur != null ? cur.ToString() : null;
+                if (curS == want) return;   // 已经是目标炮弹，不重复设置（省掉 InvalidateConfigCache 的开销）
+                nameF.SetValue(pd, new StringName(want));
+                var inv = pt.GetMethod("InvalidateConfigCache", Type.EmptyTypes);
+                if (inv != null) { try { inv.Invoke(pd, null); } catch { } }
+                if (_cannonProjLog++ % 20 == 0) Bootstrap.Log("炮类换弹: " + curS + " → " + want);
+            }
+            catch { }
+        }
+
+        /// <summary>消费多发补发队列。每轮最多补 2 发：一帧内连调太多次会让炮的状态机
+        /// 来不及走完一次 Fire 流程，反而打不出来。</summary>
+        static void FlushCannonBurst()
+        {
+            if (_cannonBurstQueue.Count == 0) return;
+            int n = Math.Min(2, _cannonBurstQueue.Count);
+            for (int i = 0; i < n; i++)
+            {
+                object cc = _cannonBurstQueue[0];
+                _cannonBurstQueue.RemoveAt(0);
+                try
+                {
+                    if (cc is GodotObject g && !GodotObject.IsInstanceValid(g)) continue;
+                    var t = cc.GetType();
+                    var fa = t.GetMethod("FireAt", new Type[] { typeof(Vector2) });
+                    if (fa == null) continue;
+                    var tp = t.GetField("targetPos", BindingFlags.Public | BindingFlags.Instance);
+                    Vector2 pos = (tp != null && tp.GetValue(cc) is Vector2 v) ? v : Vector2.Zero;
+                    // 补发前先清冷却：还在 Rest 的话游戏会拒绝这次 FireAt
+                    var remF = t.GetField("_restTimerRemaining", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (remF != null) remF.SetValue(cc, 0.0);
+                    fa.Invoke(cc, new object[] { pos });
+                }
+                catch { }
+            }
         }
 
         /// <summary>攻速（独立逻辑）：由 patcher 注入到 AttackComponent.BatchUpdateValidated 开头，每帧直接控制 timer。

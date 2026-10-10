@@ -694,6 +694,62 @@ namespace PvzheMod
                 chkPurple.ButtonPressed = ModSettings.IgnorePurple;
                 chkPurple.Toggled += OnPurpleToggled;
                 vbGame.AddChild(chkPurple);
+
+                // ── 掉落卡牌（2026-09-24 B 组）──
+                // ★ 卡片用**下拉选择**（与「子弹类型修改」同一套做法），不让人手填 ID ——
+                //   卡 ID 是 PlantPeashooter 这种英文名，手填一错就静默不掉东西，
+                //   而且没人记得住。列表来自 GetPacketIds(true)（战斗中才有内容）。
+                {
+                    var dropRowZ = new HBoxContainer();
+                    dropRowZ.AddThemeConstantOverride("separation", 6);
+                    var chkDropZ = new CheckButton();
+                    chkDropZ.Text = "僵尸死亡掉卡";
+                    chkDropZ.ButtonPressed = ModSettings.ZombieDropCard;
+                    chkDropZ.Toggled += OnZombieDropToggled;
+                    dropRowZ.AddChild(chkDropZ);
+                    var editZId = new OptionButton();
+                    editZId.CustomMinimumSize = new Vector2(190, 0);
+                    editZId.AddItem("随机卡", 0);
+                    LoadDropCardOptions(editZId, ModSettings.ZombieDropId);
+                    editZId.ItemSelected += idx =>
+                    {
+                        ModSettings.ZombieDropId = DropIdFromIndex(editZId, (int)idx);
+                        Bootstrap.Log("ModUI: 僵尸掉卡=" + (ModSettings.ZombieDropId == "" ? "随机" : ModSettings.ZombieDropId));
+                    };
+                    dropRowZ.AddChild(editZId);
+                    var lblZ = new Label(); lblZ.Text = "张"; dropRowZ.AddChild(lblZ);
+                    var editZN = new LineEdit();
+                    editZN.Text = ModSettings.ZombieDropCount.ToString();
+                    editZN.CustomMinimumSize = new Vector2(48, 0);
+                    editZN.TextSubmitted += OnZombieDropCountSubmit;
+                    dropRowZ.AddChild(editZN);
+                    vbGame.AddChild(dropRowZ);
+
+                    var dropRowP = new HBoxContainer();
+                    dropRowP.AddThemeConstantOverride("separation", 6);
+                    var chkDropP = new CheckButton();
+                    chkDropP.Text = "植物死亡掉卡";
+                    chkDropP.ButtonPressed = ModSettings.PlantDropCard;
+                    chkDropP.Toggled += OnPlantDropToggled;
+                    dropRowP.AddChild(chkDropP);
+                    var editPId = new OptionButton();
+                    editPId.CustomMinimumSize = new Vector2(190, 0);
+                    editPId.AddItem("随机卡", 0);
+                    LoadDropCardOptions(editPId, ModSettings.PlantDropId);
+                    editPId.ItemSelected += idx =>
+                    {
+                        ModSettings.PlantDropId = DropIdFromIndex(editPId, (int)idx);
+                        Bootstrap.Log("ModUI: 植物掉卡=" + (ModSettings.PlantDropId == "" ? "随机" : ModSettings.PlantDropId));
+                    };
+                    dropRowP.AddChild(editPId);
+                    var lblP = new Label(); lblP.Text = "张"; dropRowP.AddChild(lblP);
+                    var editPN = new LineEdit();
+                    editPN.Text = ModSettings.PlantDropCount.ToString();
+                    editPN.CustomMinimumSize = new Vector2(48, 0);
+                    editPN.TextSubmitted += OnPlantDropCountSubmit;
+                    dropRowP.AddChild(editPN);
+                    vbGame.AddChild(dropRowP);
+                }
                 var killBtn = new Button();
                 killBtn.Text = "杀光当前僵尸";
                 killBtn.Pressed += OnKillZombies;
@@ -1223,6 +1279,65 @@ namespace PvzheMod
                 chkCharmZ.ButtonPressed = ModSettings.CharmZombie;
                 chkCharmZ.Toggled += on => { ModSettings.CharmZombie = on; Bootstrap.Log("ModUI: 魅惑僵尸(持续)=" + on); };
                 vbCombat.AddChild(chkCharmZ);
+
+                // ── 魅惑 boss 光环（C 组）──────────────────────────────
+                // 僵王被魅惑后，会把身边这个半径内的敌方僵尸一起拉成魅惑（模拟它的手下跟着反水）。
+                // 独立于「魅惑僵尸」开关：只开光环时，场上其他僵尸不受影响。
+                var chkBossAura = new CheckButton();
+                chkBossAura.Text = "魅惑boss传染手下";
+                chkBossAura.ButtonPressed = ModSettings.BossCharmAura;
+                chkBossAura.Toggled += on => { ModSettings.BossCharmAura = on; Bootstrap.Log("ModUI: BOSS魅惑光环=" + on); };
+                vbCombat.AddChild(chkBossAura);
+
+                var bossRRow = new HBoxContainer();
+                var bossRLabel = new Label();
+                bossRLabel.Text = "光环半径(格)";
+                bossRRow.AddChild(bossRLabel);
+                var bossREdit = new LineEdit();
+                bossREdit.Text = ModSettings.BossCharmRadius.ToString("0.#");
+                bossREdit.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+                bossREdit.TextSubmitted += t =>
+                {
+                    if (float.TryParse(t, out var rv)) ModSettings.BossCharmRadius = Mathf.Clamp(rv, 0.5f, 12f);
+                    bossREdit.Text = ModSettings.BossCharmRadius.ToString("0.#");
+                };
+                bossRRow.AddChild(bossREdit);
+                vbCombat.AddChild(bossRRow);
+
+                // ── 时停（E 组）────────────────────────────────
+                // PC 版按住 Shift 即停；手机版不绑快捷键（触屏没 Shift，按住式操作会和拖拽种卡冲突）。
+                var chkTimeStop = new CheckButton();
+                chkTimeStop.Text = "时停键（PC 按住 Shift）";
+                chkTimeStop.ButtonPressed = ModSettings.TimeStopKeyEnabled;
+                chkTimeStop.Toggled += on => { ModSettings.TimeStopKeyEnabled = on; Bootstrap.Log("ModUI: 时停快捷键=" + on); };
+                vbCombat.AddChild(chkTimeStop);
+
+                var timeStopHint = new Label();
+                timeStopHint.Text = GameCheats.IsMobilePlatform() ? "手机版不支持快捷键" : "按住 Shift 全场静止，松开恢复";
+                vbCombat.AddChild(timeStopHint);
+
+                // ── 无尽跳轮（E 组）──────────────────────────────
+                // 无尽模式里直接推进到指定轮数；逐帧推波（每 12 帧一波），避免一帧连跳把波次配置打乱。
+                var waveJumpRow = new HBoxContainer();
+                var wjLabel = new Label();
+                wjLabel.Text = "跳到第几轮";
+                waveJumpRow.AddChild(wjLabel);
+                var wjEdit = new LineEdit();
+                wjEdit.PlaceholderText = "如 20";
+                wjEdit.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+                waveJumpRow.AddChild(wjEdit);
+                var wjBtn = new Button();
+                wjBtn.Text = "跳";
+                wjBtn.Pressed += () =>
+                {
+                    if (int.TryParse(wjEdit.Text.Trim(), out var w))
+                    {
+                        GameCheats.JumpToWaveTarget(w);
+                        wjEdit.Text = GameCheats.GetWaveJumpTarget().ToString();
+                    }
+                };
+                waveJumpRow.AddChild(wjBtn);
+                vbCombat.AddChild(waveJumpRow);
                 var btnUncharm = new Button();
                 btnUncharm.Text = "还原全部魅惑";
                 btnUncharm.Pressed += OnUncharmAll;
@@ -1300,6 +1415,14 @@ namespace PvzheMod
                 chkVaseRandom.ButtonPressed = ModSettings.VaseRandom;
                 chkVaseRandom.Toggled += OnVaseRandomToggled;
                 vbCombat.AddChild(chkVaseRandom);
+                // D 组：罐子内容默认在【生成时】就定下来，罐内全程不变 ——
+                // 隔着罐子/透视看到的就是砸出来那张，可以据此选罐。
+                // 想恢复旧行为（每次砸开的瞬间重抽）就勾这个。
+                var chkVaseReroll = new CheckButton();
+                chkVaseReroll.Text = "砸罐时重抽内容（旧行为）";
+                chkVaseReroll.ButtonPressed = ModSettings.VaseRerollOnBreak;
+                chkVaseReroll.Toggled += on => { ModSettings.VaseRerollOnBreak = on; Bootstrap.Log("ModUI: 砸罐重抽=" + on); };
+                vbCombat.AddChild(chkVaseReroll);
                 var chkSbRandom = new CheckButton();
                 chkSbRandom.Text = "卡槽卡牌随机";
                 chkSbRandom.ButtonPressed = ModSettings.SeedBankRandom;
@@ -1310,6 +1433,13 @@ namespace PvzheMod
                 chkSbZombie.ButtonPressed = ModSettings.SeedBankRandomZombie;
                 chkSbZombie.Toggled += on => { ModSettings.SeedBankRandomZombie = on; Bootstrap.Log("ModUI: 卡槽随机成僵尸=" + on); };
                 vbCombat.AddChild(chkSbZombie);
+                // D 组：旧版会跳过「正拿在手上/正在拖」的那张卡，手上那张永远不变。
+                // 勾上后手上的卡也一起随机（就是用户要求的「手上也随机变」）。
+                var chkSbHand = new CheckButton();
+                chkSbHand.Text = "手上拿着的卡也随机";
+                chkSbHand.ButtonPressed = ModSettings.SeedBankHandRandom;
+                chkSbHand.Toggled += on => { ModSettings.SeedBankHandRandom = on; Bootstrap.Log("ModUI: 手上卡也随机=" + on); };
+                vbCombat.AddChild(chkSbHand);
 
                 // ===== 标签：趣味 =====
                 var vbFun = MakeTab(_contentArea, "趣味");
@@ -1945,6 +2075,68 @@ namespace PvzheMod
         static void OnConveyorToggled(bool on) { ModSettings.ConveyorFast = on; Bootstrap.Log("ModUI: 传送带加速=" + on); }
         static void OnRainToggled(bool on) { ModSettings.RainFast = on; Bootstrap.Log("ModUI: 种子雨加速=" + on); }
         static void OnVaseRandomToggled(bool on) { ModSettings.VaseRandom = on; Bootstrap.Log("ModUI: 罐子自动随机=" + on); }
+
+        // ── 掉落卡牌（B 组）──
+        // ★ 输入框用 TextSubmitted（回车提交）而不是 TextChanged：
+        //   TextChanged 会在每敲一个字符时写一次设置，卡 ID 会一路写成半截字符串，
+        //   而掉落是后台按缓存差分触发的，拿到半截 ID 就什么都刷不出来。
+        static void OnZombieDropToggled(bool on) { ModSettings.ZombieDropCard = on; Bootstrap.Log("ModUI: 僵尸死亡掉卡=" + on); }
+        static void OnPlantDropToggled(bool on) { ModSettings.PlantDropCard = on; Bootstrap.Log("ModUI: 植物死亡掉卡=" + on); }
+        static void OnZombieDropCountSubmit(string v) { ModSettings.ZombieDropCount = ClampDropCount(v); Bootstrap.Log("ModUI: 僵尸掉卡数=" + ModSettings.ZombieDropCount); }
+        static void OnPlantDropCountSubmit(string v) { ModSettings.PlantDropCount = ClampDropCount(v); Bootstrap.Log("ModUI: 植物掉卡数=" + ModSettings.PlantDropCount); }
+
+        /// <summary>往下拉框里装可掉落的卡片（顺带把当前设置选中）。
+        /// ★ 用 metadata 存真实 ID 而不是靠下标反推：列表一旦因为场景切换变得不一样，
+        ///   按下标算就会错位到别的卡上（ItemList 那边早就这么做了）。
+        /// ★ 列表来自“植物卡”（GetPacketIds(true)）：掉落物是给玩家用的卡，
+        ///   僵尸卡一般直接刷实物更直接。</summary>
+        static void LoadDropCardOptions(OptionButton sel, string current)
+        {
+            try
+            {
+                var ids = GameCheats.GetPacketIds(true);
+                if (ids == null || ids.Count == 0)
+                {
+                    sel.AddItem("（进战斗后重开面板才能选卡）", -1);
+                    return;
+                }
+                int cur = 0;
+                for (int i = 0; i < ids.Count; i++)
+                {
+                    sel.AddItem(GameCheats.GetPacketDisplayName(ids[i]), i + 1);
+                    sel.SetItemMetadata(i + 1, ids[i]);
+                    if (!string.IsNullOrEmpty(current) && ids[i] == current) cur = i + 1;
+                }
+                sel.Select(cur);
+            }
+            catch (System.Exception ex)
+            {
+                Bootstrap.Log("掉卡下拉装填异常: " + ex.Message);
+            }
+        }
+
+        /// <summary>从下拉框读回选中的卡 ID。index 0 = 随机（空字符串）。</summary>
+        static string DropIdFromIndex(OptionButton sel, int index)
+        {
+            try
+            {
+                if (index <= 0) return "";
+                var md = sel.GetItemMetadata(index);
+                return md.VariantType == Variant.Type.Nil ? "" : md.AsString();
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>张数夹在 1..20。★ 不夹的话，手滑输个 0 会看起来“开了开关但什么都不掉”，
+        /// 而输个 999 会一次刷出海量卡牌直接把场景卡死。</summary>
+        static int ClampDropCount(string v)
+        {
+            int n;
+            if (!int.TryParse((v ?? "").Trim(), out n)) return 1;
+            if (n < 1) return 1;
+            if (n > 20) return 20;
+            return n;
+        }
         static void OnSbRandomToggled(bool on) { ModSettings.SeedBankRandom = on; Bootstrap.Log("ModUI: 卡槽卡牌随机=" + on); }
         static void OnCraterToggled(bool on) { ModSettings.ClearCrater = on; Bootstrap.Log("ModUI: 清除弹坑=" + on); }
         static void OnZombieColorToggled(bool on) { ModSettings.ZombieColor = on; Bootstrap.Log("ModUI: 僵尸变色=" + on); }

@@ -32,6 +32,8 @@ namespace PvzheMod
         public static bool ZombieInvincible = false;   // 僵尸无敌
         public static bool CharmPlant = false;         // 魅惑植物（反转攻击）
         public static bool CharmZombie = false;        // 魅惑僵尸
+        public static bool BossCharmAura = false;      // 魅惑 boss 光环：被魅惑的僵王把身边僵尸一起拉成魅惑
+        public static float BossCharmRadius = 3.0f;    // 光环半径（格，1 格≈80px）
         public static bool BulletTrack = false;         // 子弹追踪（patcher 注入 BulletField.Spawn 强制 trackOpen）
         public static bool BulletFollowMouse = false;    // 子弹跟随鼠标
         public static bool BulletRandom = false;         // 随机子弹（随机追踪）
@@ -73,6 +75,16 @@ namespace PvzheMod
         public static bool ForceFog = false;               // 强制迷雾（任何关卡都开启迷雾）
         public static bool IgnoreRedLine = false;          // 无视红线：警戒线（红线）区域也能种植物/僵尸
         public static bool SeedBankRandomZombie = false;   // 卡槽卡牌随机成僵尸（false=随机成植物）
+
+        // ── 掉落卡牌（2026-09-24 B 组）──
+        // ★ 这里存的是**卡牌本身**（不是改属性），所以三个值是一组：
+        //   开不开、掉什么、掉几张。DropId 留空 = 每张都随机。
+        public static bool ZombieDropCard = false;         // 僵尸死亡掉落卡牌
+        public static string ZombieDropId = "";           // 掉的卡（留空=随机）
+        public static int ZombieDropCount = 1;            // 掉几张
+        public static bool PlantDropCard = false;          // 植物死亡掉落卡牌
+        public static string PlantDropId = "";            // 掉的卡（留空=随机）
+        public static int PlantDropCount = 1;             // 掉几张
         public static bool ShovelCherry = false;           // 铲子铲植物：随机在僵尸脚下生成樱桃炸弹
         public static bool BloverClearAll = false;          // 三叶草吹飞所有僵尸（种 Blover 时清空场上僵尸）
         public static int CannonMultiShot = 1;              // 炮类/投手一次发射数量（1=原版，2+ = 一次发射多枚）
@@ -95,6 +107,15 @@ namespace PvzheMod
         public static bool TrickFixedOnly = false;     // true=只固定第一张目标卡；false=在目标池内随机
         public static string TrickPool = "";          // 目标卡池（逗号/空格/换行分隔的植物或僵尸 ID；留空=不篡改）
         public static bool SeedBankEveryFrame = true;  // 卡槽卡牌随机：true=1帧1刷（极速闪换）；false=约每秒6次
+        // ★ D 组：旧版固定跳过「正拿在手上/正在拖」的卡，导致手上那张永远不变。
+        //   开这个开关后连手上的卡也一起随机（用户要求「手上也随机变」）。
+        public static bool SeedBankHandRandom = true;
+        // ★ D 组：罐子内容。默认 false = 罐子【生成时】就抽好了，罐内内容全程固定
+        //   （隔着罐子/透视看到的就是砸出来那张，玩家可以据此选罐）。
+        //   开 true = 恢复旧行为：每次砸开的瞬间再重抽一次。
+        public static bool VaseRerollOnBreak = false;
+        // ★ E 组：时停。PC 版按住 Shift 即停（松开恢复）；手机版不绑快捷键。
+        public static bool TimeStopKeyEnabled = true;
         public static bool EngineLowRes = false;       // 低配渲染：把窗口渲染分辨率降到 1280 宽（stretch 等比缩放，帧率显著提升）
         /// <summary>是否手动保存过（存档文件带 #manual 标记）。启动时未手动保存过 → 全部功能默认关闭。</summary>
         public static bool ManualSaved;
@@ -116,6 +137,8 @@ namespace PvzheMod
                 sb.AppendLine("ZombieInvincible=" + ZombieInvincible);
                 sb.AppendLine("CharmPlant=" + CharmPlant);
                 sb.AppendLine("CharmZombie=" + CharmZombie);
+                sb.AppendLine("BossCharmAura=" + BossCharmAura);
+                sb.AppendLine("BossCharmRadius=" + BossCharmRadius);
                 sb.AppendLine("BulletTrack=" + BulletTrack);
                 sb.AppendLine("BulletFollowMouse=" + BulletFollowMouse);
                 sb.AppendLine("BulletRandom=" + BulletRandom);
@@ -127,6 +150,12 @@ namespace PvzheMod
                 sb.AppendLine("RainFast=" + RainFast);
                 sb.AppendLine("VaseRandom=" + VaseRandom);
                 sb.AppendLine("SeedBankRandom=" + SeedBankRandom);
+                sb.AppendLine("ZombieDropCard=" + ZombieDropCard);
+                sb.AppendLine("ZombieDropId=" + ZombieDropId);
+                sb.AppendLine("ZombieDropCount=" + ZombieDropCount);
+                sb.AppendLine("PlantDropCard=" + PlantDropCard);
+                sb.AppendLine("PlantDropId=" + PlantDropId);
+                sb.AppendLine("PlantDropCount=" + PlantDropCount);
                 sb.AppendLine("PlantOverlap=" + PlantOverlap);
                 sb.AppendLine("IgnoreTerrain=" + IgnoreTerrain);
                 sb.AppendLine("IgnorePurple=" + IgnorePurple);
@@ -181,6 +210,9 @@ namespace PvzheMod
                 sb.AppendLine("TrickFixedOnly=" + TrickFixedOnly);
                 sb.AppendLine("TrickPool=" + TrickPool);
                 sb.AppendLine("SeedBankEveryFrame=" + SeedBankEveryFrame);
+                sb.AppendLine("SeedBankHandRandom=" + SeedBankHandRandom);
+                sb.AppendLine("VaseRerollOnBreak=" + VaseRerollOnBreak);
+                sb.AppendLine("TimeStopKeyEnabled=" + TimeStopKeyEnabled);
                 sb.AppendLine("EngineLowRes=" + EngineLowRes);
                 // ===== 补全：主开关/无限资源/ESP/趣味 等持久化（重进游戏保持开启状态） =====
                 sb.AppendLine("Enabled=" + Enabled);
@@ -239,6 +271,8 @@ namespace PvzheMod
                         case "ZombieInvincible": if (bool.TryParse(v, out b)) ZombieInvincible = b; break;
                         case "CharmPlant": if (bool.TryParse(v, out b)) CharmPlant = b; break;
                         case "CharmZombie": if (bool.TryParse(v, out b)) CharmZombie = b; break;
+                        case "BossCharmAura": if (bool.TryParse(v, out b)) BossCharmAura = b; break;
+                        case "BossCharmRadius": if (float.TryParse(v, out f)) BossCharmRadius = f; break;
                         case "BulletTrack": if (bool.TryParse(v, out b)) BulletTrack = b; break;
                         case "BulletFollowMouse": if (bool.TryParse(v, out b)) BulletFollowMouse = b; break;
                         case "BulletRandom": if (bool.TryParse(v, out b)) BulletRandom = b; break;
@@ -250,6 +284,12 @@ namespace PvzheMod
                         case "RainFast": if (bool.TryParse(v, out b)) RainFast = b; break;
                         case "VaseRandom": if (bool.TryParse(v, out b)) VaseRandom = b; break;
                         case "SeedBankRandom": if (bool.TryParse(v, out b)) SeedBankRandom = b; break;
+                        case "ZombieDropCard": if (bool.TryParse(v, out b)) ZombieDropCard = b; break;
+                        case "ZombieDropId": ZombieDropId = v; break;
+                        case "ZombieDropCount": { int n; if (int.TryParse(v, out n)) ZombieDropCount = n; break; }
+                        case "PlantDropCard": if (bool.TryParse(v, out b)) PlantDropCard = b; break;
+                        case "PlantDropId": PlantDropId = v; break;
+                        case "PlantDropCount": { int n; if (int.TryParse(v, out n)) PlantDropCount = n; break; }
                         case "PlantOverlap": if (bool.TryParse(v, out b)) PlantOverlap = b; break;
                         case "IgnoreTerrain": if (bool.TryParse(v, out b)) IgnoreTerrain = b; break;
                         case "IgnorePurple": if (bool.TryParse(v, out b)) IgnorePurple = b; break;
@@ -304,6 +344,9 @@ namespace PvzheMod
                         case "TrickFixedOnly": if (bool.TryParse(v, out b)) TrickFixedOnly = b; break;
                         case "TrickPool": TrickPool = v; break;
                         case "SeedBankEveryFrame": if (bool.TryParse(v, out b)) SeedBankEveryFrame = b; break;
+                        case "SeedBankHandRandom": if (bool.TryParse(v, out b)) SeedBankHandRandom = b; break;
+                        case "VaseRerollOnBreak": if (bool.TryParse(v, out b)) VaseRerollOnBreak = b; break;
+                        case "TimeStopKeyEnabled": if (bool.TryParse(v, out b)) TimeStopKeyEnabled = b; break;
                         case "EngineLowRes": if (bool.TryParse(v, out b)) EngineLowRes = b; break;
                         case "Enabled": if (bool.TryParse(v, out b)) Enabled = b; break;
                         case "FunEnabled": if (bool.TryParse(v, out b)) FunEnabled = b; break;
@@ -343,10 +386,13 @@ namespace PvzheMod
             PlantHP = 1.0f; ZombieHP = 1.0f;
             PlantInvincible = false; ZombieInvincible = false;
             CharmPlant = false; CharmZombie = false;
+            BossCharmAura = false; BossCharmRadius = 3.0f;
             BulletTrack = false; BulletFollowMouse = false; BulletRandom = false;
             PlantAutoFire = false; FogESP = false; PlantColumn = false;
             NoSleep = false; ClearCrater = false; ConveyorFast = false; RainFast = false;
             VaseRandom = false; SeedBankRandom = false;
+            SeedBankHandRandom = true; VaseRerollOnBreak = false;
+            TimeStopKeyEnabled = true;
             ShovelCherry = false; BloverClearAll = false; CannonMultiShot = 1;
             ZombieColor = false; ZombieDance = false;
             PlantNoAttack = false; ZombieNoAttack = false; ZombieNoMove = false;

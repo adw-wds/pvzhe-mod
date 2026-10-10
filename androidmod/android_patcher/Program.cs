@@ -14,8 +14,13 @@ using Mono.Cecil.Cil;
 /// </summary>
 class Program
 {
-    // 手机版：APK 解压目录的 arm64 程序集目录（0.28）
-    static string gameDir = @"D:\杂交版028手机\assets\.godot\mono\publish\arm64";
+    // 手机版：APK 解压目录的 arm64 程序集目录
+    // ★ 换游戏版本时必须同步三处：这里 + androidmod\build_apk.ps1 的 $srcDir + 解压脚本。
+    //   漏改这里 = 注到旧版本目录，打出来的 APK 还是旧的（表现为"改了没生效"）。
+    //   2026-09-25：0.28.1 → 0.29（0.29 arm64 原版 26,899,968 B / A5BCDD28A8E51E02，
+    //   与电脑版同大小但哈希不同 ⇒ 手机版必须单独注入一份）
+    //   2026-10-10：0.29 → 0.30（解压目录 CHANGE_ME_ANDROID_APK_DIR）
+    static string gameDir = @"CHANGE_ME_ANDROID_APK_DIR\assets\.godot\mono\publish\arm64";
     static string mainPath = Path.Combine(gameDir, "PlantsVsZombies.dll");
     static string backupPath = mainPath + ".clean";   // 手机版干净原版（首次自动从当前文件备份）
     static string modPath = @"androidmod\PvzheAndroid\bin\Release\net8.0\PvzheMod.dll";

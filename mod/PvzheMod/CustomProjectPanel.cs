@@ -275,12 +275,16 @@ namespace PvzheMod
             }
         }
 
-        /// <summary>随机可种植格：行 = 地图实际行数内随机（GameCheats.GetMapRowCount 探测，兜底 5），列 = 0..8 随机。</summary>
+        /// <summary>随机可种植格：行/列都在**地图实际范围**内随机（GetMapRowCount/GetMapColCount 探测，
+        /// 兜底 5 行 9 列）。★ 这里用 0-based（与 CustomProject 种植流程的约定一致），
+        /// 而 SpawnUI 那边是 1-based（GetMapGridPos 会 +1）—— 两者不要互相抄。
+        /// 原来列写死成 0..8，换到列数不同的自制关卡就会越界或刷不到边列。</summary>
         static Vector2I RandomGridPos()
         {
             int rows = GameCheats.GetMapRowCount();
+            int cols = GameCheats.GetMapColCount();
             int row = GD.RandRange(0, Math.Max(0, rows - 1));
-            int col = GD.RandRange(0, 8);
+            int col = GD.RandRange(0, Math.Max(0, cols - 1));
             return new Vector2I(col, row);
         }
     }

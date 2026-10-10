@@ -23,7 +23,7 @@ namespace PvzheMod
                 {
                     string dir = null;
                     try { dir = Godot.OS.GetUserDataDir(); } catch { }
-                    if (string.IsNullOrEmpty(dir)) dir = @"mod";
+                    if (string.IsNullOrEmpty(dir)) dir = @"CHANGE_ME_PROJECT_DIR\mod";
                     _logPath = dir + "/mod_log.txt";
                 }
                 lock (_logLock)

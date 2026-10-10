@@ -14,7 +14,16 @@ using Mono.Cecil.Cil;
 /// </summary>
 class Program
 {
-    static string gameDir = @"";
+    // ★ 注入目标 = 游戏本体主程序集。改了这里发布包才会跟着变！
+    //   （build_pc.ps1 里的 $gameDir 只管"复制成品"，真正决定注入到哪里的是这一行）
+    //   2026-09-25：0.28.1 → 0.29（0.29 原版 DLL 26,899,968 B / FB90CEA3CB95BFB8，与 0.28.1 不同 ⇒ 必须重新注入）
+    //   2026-10-10：0.29 → 0.30（0.30 原版 DLL **18,746,880 B**，比 0.29 小 8MB ⇒ 差异很大，必须重新注入）
+    //
+    //   ★ 允许用环境变量 PVZHE_GAME_DIR 覆盖 —— 换版本、或者想先在**副本**上试注入时，
+    //     不用改这个文件（0.28/0.28.1/0.29 三次迁移都靠"改这一行"，很容易漏改第二处）。
+    static string gameDir = Environment.GetEnvironmentVariable("PVZHE_GAME_DIR") is { Length: > 0 } envDir
+        ? envDir
+        : @"<你的游戏目录>";
     static string mainPath = Path.Combine(gameDir, "PlantsVsZombies.dll");
     static string backupPath = mainPath + ".bak";
     static string modPath = @"mod\PvzheMod\bin\Release\net8.0\PvzheMod.dll";
