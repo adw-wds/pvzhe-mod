@@ -155,8 +155,8 @@ public partial class CustomPlantWindow : Window
     // ---- SP8 卡牌图标（四类型编辑面板各一个状态文字，key=type） ----
     readonly Dictionary<string, TextBlock> _iconStatus = new();
 
-    const string BaseRoot = @".";
-    const string PlantRoot = @"custom_plants";
+    const string BaseRoot = @"CHANGE_ME_PROJECT_DIR";
+    const string PlantRoot = @"CHANGE_ME_PROJECT_DIR\custom_plants";
 
     /// <summary>导出目录：custom_projects\导出（.cproj 包）。</summary>
     static string ExportRoot => Path.Combine(BaseRoot, "custom_projects", "导出");

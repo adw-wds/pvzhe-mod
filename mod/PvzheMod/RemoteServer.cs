@@ -394,11 +394,56 @@ namespace PvzheMod
                     if (name == "OpenProjectPanel") { CustomProjectPanel.Toggle(); return "ok"; }
                     if (name == "SaveSettings") { ModSettings.Save(); return "ok"; }
                     if (name == "ApplyEnginePerf") { GameCheats.ApplyEnginePerfNow(); return "ok"; }
+                    // 性能优化：总开关（渲染+调度+音频+内存 一体），返回逐项改动明细
+                    if (name == "PerfBoost")
+                    {
+                        string want; qs.TryGetValue("on", out want);
+                        bool on = !(want == "0" || want == "false" || want == "off");
+                        return GameCheats.PerfBoost(on);
+                    }
+                    // 性能优化：读取实时性能数据（FPS/主线程/物理/节点/绘制/托管内存/渲染线程模式）
+                    if (name == "PerfReport") { return GameCheats.PerfReport(); }
+                    // 回收内存：【仅手动】—— 无参 GC.Collect() 是阻塞式完整 gen2 回收，
+                    // 自动周期性跑会造成可感知的卡顿尖峰（实测教训），所以只留手动按钮。
+                    if (name == "PerfGc") { return GameCheats.GcOnce(); }
+                    if (name == "RenderThreadReport") { return GameCheats.RenderThreadReport(); }
                     if (name == "LaunchMowers") { GameCheats.LaunchAllMowers(); return "ok"; }
                     if (name == "RestoreMowers") { GameCheats.RestoreAllMowers(); return "ok"; }
                     if (name == "InstantWinAll") { GameCheats.InstantWinAll(); return "ok"; }
                     if (name == "CompleteAllLevels") { GameCheats.CompleteAllLevels(); return "ok"; }
                     if (name == "CompleteAllDailyLevels") { int n = GameCheats.CompleteAllDailyLevels(); return n + ""; }
+                    // ---- 布阵器（战场快照 保存/加载）----
+                    // ★ 这些 handler 跑在 Poll() 里 = 主线程，可以安全碰场景节点。
+                    //   parts 是逗号串（map,plant,plantst,zombie,zombiest,sun,wave,mower），空 = 全选。
+                    if (name == "BoardList") return GameCheats.BoardListJson();
+                    if (name == "BoardSave")
+                    {
+                        // ★ 载荷必须用 nm=：name= 已被 /cmd 的命令键占用，
+                        //   若客户端写 name=BoardSave&name=xxx，ParseQuery 后写覆盖会让命令分派直接失败（err:no-cmd）。
+                        string nm; string pt;
+                        qs.TryGetValue("nm", out nm); qs.TryGetValue("parts", out pt);
+                        return GameCheats.BoardSave(MainRoot(), nm, pt);
+                    }
+                    if (name == "BoardLoad")
+                    {
+                        string bf; string pt;
+                        qs.TryGetValue("file", out bf); qs.TryGetValue("parts", out pt);
+                        if (string.IsNullOrEmpty(bf)) return "err:no-file";
+                        return GameCheats.BoardLoad(MainRoot(), bf, pt);
+                    }
+                    if (name == "BoardDelete")
+                    {
+                        string bf; qs.TryGetValue("file", out bf);
+                        if (string.IsNullOrEmpty(bf)) return "err:no-file";
+                        return GameCheats.BoardDelete(bf);
+                    }
+                    if (name == "BoardExport")
+                    {
+                        string bf; qs.TryGetValue("file", out bf);
+                        if (string.IsNullOrEmpty(bf)) return "err:no-file";
+                        return GameCheats.BoardExport(bf);
+                    }
+                    if (name == "BoardLibraryDir") return GameCheats.BoardLibraryDir();
                     // ---- 挖掘更多游戏函数为端点（见开发文档） ----
                     if (name == "SkipWave") { GameCheats.SkipWave(); return "ok"; }
                     if (name == "SkipFinalWave") { GameCheats.SkipFinalWave(); return "ok"; }
@@ -410,6 +455,33 @@ namespace PvzheMod
                     if (name == "KillAllPlants") { int n = GameCheats.KillAllPlants(); return n + ""; }
                     if (name == "CompleteMode") { string mode; qs.TryGetValue("mode", out mode); if (string.IsNullOrEmpty(mode)) return "err:no-mode"; GameCheats.CompleteMode(mode); return "ok"; }
                     if (name == "AwardDiamondOnWin") { string num; qs.TryGetValue("num", out num); int n = 10; int.TryParse(num, out n); GameCheats.AwardDiamondOnWin(n); return "ok"; }
+                    // 刷币：type = Silver(银币) / Gold(金币) / Diamond(钻石) / LuckyBag(钱袋)，num 1..200
+                    if (name == "SpawnCurrency") { string ct; qs.TryGetValue("type", out ct); string cn; qs.TryGetValue("num", out cn); int cnum = 1; int.TryParse(cn, out cnum); if (cnum < 1) cnum = 1; if (cnum > 200) cnum = 200; if (string.IsNullOrEmpty(ct)) ct = "Gold"; GameCheats.CreateCurrency(ct, cnum); return "ok"; }
+                    // 掉奖杯 / 钱袋本体：tag = Trophy / Purse
+                    if (name == "SpawnAward") { string tg; qs.TryGetValue("tag", out tg); if (string.IsNullOrEmpty(tg)) tg = "Purse"; string gter = (tg == "Trophy") ? "get_TOWER_DEFENSE_AWARD_TROPHY" : "get_TOWER_DEFENSE_AWARD_PURSE"; GameCheats.SpawnAward(gter, tg); return "ok"; }
+                    // 个体级子弹：id = 实体 instanceId（/entities 里的 id），type = 子弹 key / "*"(随机) / ""(清除)
+                    if (name == "SetEntityBullet")
+                    {
+                        string eid, etp;
+                        qs.TryGetValue("id", out eid);
+                        qs.TryGetValue("type", out etp);
+                        long eidv;
+                        if (!long.TryParse(eid, out eidv) || eidv == 0) return "err:bad-id";
+                        ModSettings.SetPerEntityBullet(eidv, etp ?? "");
+                        ModSettings.Save();
+                        return "ok:" + ModSettings.PerEntityBullet;
+                    }
+                    // 种类级子弹（植物/僵尸各自）：id = 卡片 packet id（/packets 返回的 id），type = 子弹 key / "*"(随机) / ""(清除)
+                    if (name == "SetPacketBullet")
+                    {
+                        string pid, ptp;
+                        qs.TryGetValue("id", out pid);
+                        qs.TryGetValue("type", out ptp);
+                        if (string.IsNullOrEmpty(pid)) return "err:bad-id";
+                        ModSettings.SetPerPacketBullet(pid, ptp ?? "");
+                        ModSettings.Save();
+                        return "ok:" + ModSettings.PerPacketBullet;
+                    }
                     if (name == "ImportLevelFile") { string filePath; qs.TryGetValue("path", out filePath); if (string.IsNullOrEmpty(filePath)) return "err:no-path"; GameCheats.ImportLevelFile(filePath); return "ok"; }
                     if (name == "ExportPvzData") return GameCheats.ExportPvzData();
                     if (name == "ExportLevelMakerAssets") return GameCheats.ExportLevelMakerAssets();
@@ -422,7 +494,7 @@ namespace PvzheMod
                     if (name == "ForceRefreshRoleCache") { GameCheats.ForceRefreshRoleCache(); return "ok"; }
                     if (name == "ClearSeedBankAll") { GameCheats.ClearSeedBankAll(MainRoot()); return "ok"; }
                     if (name == "RandomizeVases") { GameCheats.RandomizeVases(MainRoot(), true); return "ok"; }
-                    if (name == "AddSun") { string num; qs.TryGetValue("num", out num); long n = 100; long.TryParse(num, out n); GameCheats.AddSun(n); return "ok"; }
+                    if (name == "AddSun") { string num; qs.TryGetValue("num", out num); long n = 100; long.TryParse(num, out n); long nsun = GameCheats.AddSun(n); return (nsun < 0) ? "err:no-level" : ("ok:" + nsun); }
                     if (name == "GetSunCount") return GameCheats.GetSunCount() + "";
                     if (name == "ToggleScreenEffect") { string fx; string add; qs.TryGetValue("fx", out fx); qs.TryGetValue("add", out add); if (string.IsNullOrEmpty(fx)) return "err:no-fx"; bool on = add == "1" || add == "true"; GameCheats.ToggleScreenEffect(fx, on); return "ok"; }
                     if (name == "ClearGlobalOverrides") { GameCheats.ClearGlobalOverrides(); return "ok"; }

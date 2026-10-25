@@ -1383,6 +1383,129 @@ namespace PvzheMod
                 saveTp.Pressed += () => { ModSettings.TrickPool = _trickPoolEdit.Text.Trim(); ModSettings.Save(); ShowToastText("目标卡池已保存"); };
                 vbCombat.AddChild(saveTp);
 
+                // ===== 标签：布阵 =====
+                var vbBoard = MakePage("布阵");
+                vbBoard.AddChild(Section("布阵器"));
+                var bdTip = new Label();
+                bdTip.Text = "把整个战场存成快照（与电脑版同一格式，文件可互导）。\n关卡内点「加载」直接铺开；主菜单点「加载」自动进同一关。";
+                bdTip.AddThemeFontSizeOverride("font_size", 12);
+                vbBoard.AddChild(bdTip);
+
+                var bdNameEdit = new LineEdit();
+                bdNameEdit.PlaceholderText = "阵型名字（留空 = 按时间自动命名）";
+                bdNameEdit.AddThemeFontSizeOverride("font_size", 15);
+                vbBoard.AddChild(bdNameEdit);
+
+                // 8 个内容分区（顺序与 MOD 端 BoardSnapshot.AllParts 一致）
+                string[,] bdDefs = {
+                    { "map", "地图" }, { "plant", "植物" }, { "plantst", "植状态" }, { "zombie", "僵尸" },
+                    { "zombiest", "僵状态" }, { "sun", "阳光" }, { "wave", "波次" }, { "mower", "推车" },
+                };
+                var bdChecks = new System.Collections.Generic.Dictionary<string, CheckButton>();
+                var bdGrid = new GridContainer();
+                bdGrid.Columns = 4;
+                bdGrid.AddThemeConstantOverride("h_separation", 6);
+                bdGrid.AddThemeConstantOverride("v_separation", 2);
+                vbBoard.AddChild(bdGrid);
+                for (int bi = 0; bi < bdDefs.GetLength(0); bi++)
+                {
+                    var cb = new CheckButton();
+                    cb.Text = bdDefs[bi, 1];
+                    cb.ButtonPressed = true;
+                    cb.AddThemeFontSizeOverride("font_size", 12);
+                    bdChecks[bdDefs[bi, 0]] = cb;
+                    bdGrid.AddChild(cb);
+                }
+
+                System.Func<string> bdParts = () =>
+                {
+                    var sb = new System.Text.StringBuilder();
+                    foreach (var kv in bdChecks)
+                    {
+                        if (!kv.Value.ButtonPressed) continue;
+                        if (sb.Length > 0) sb.Append(',');
+                        sb.Append(kv.Key);
+                    }
+                    return sb.ToString();
+                };
+
+                var bdList = new VBoxContainer();
+                bdList.AddThemeConstantOverride("separation", 4);
+                vbBoard.AddChild(bdList);
+
+                var bdStatus = new Label();
+                bdStatus.Text = "就绪。保存 / 加载结果会显示在这里。";
+                bdStatus.AddThemeFontSizeOverride("font_size", 12);
+                bdStatus.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+                vbBoard.AddChild(bdStatus);
+
+                System.Action refreshBd = null;
+                refreshBd = () =>
+                {
+                    foreach (var ch in bdList.GetChildren()) { if (ch is Node cn) cn.QueueFree(); }
+                    var parsed = Godot.Json.ParseString(GameCheats.BoardListJson());
+                    if (parsed.VariantType != Variant.Type.Array)
+                    {
+                        var bad = new Label();
+                        bad.Text = "（读不到阵型列表）";
+                        bad.AddThemeFontSizeOverride("font_size", 12);
+                        bdList.AddChild(bad);
+                        return;
+                    }
+                    var arr = parsed.AsGodotArray();
+                    if (arr.Count == 0)
+                    {
+                        var none = new Label();
+                        none.Text = "（还没有保存过阵型）";
+                        none.AddThemeFontSizeOverride("font_size", 12);
+                        bdList.AddChild(none);
+                        return;
+                    }
+                    foreach (var item in arr)
+                    {
+                        if (item.VariantType != Variant.Type.Dictionary) continue;
+                        var d = item.AsGodotDictionary();
+                        var file = d.ContainsKey("file") ? d["file"].AsString() : "";
+                        if (string.IsNullOrEmpty(file)) continue;
+                        var nm = d.ContainsKey("name") ? d["name"].AsString() : "";
+                        if (string.IsNullOrEmpty(nm)) nm = file;
+                        var row = new HBoxContainer();
+                        row.AddThemeConstantOverride("separation", 6);
+                        var lab = new Label();
+                        lab.Text = nm + "\n植物 " + (d.ContainsKey("plants") ? d["plants"].AsInt32() : 0)
+                                 + " · 僵尸 " + (d.ContainsKey("zombies") ? d["zombies"].AsInt32() : 0)
+                                 + " · " + (d.ContainsKey("time") ? d["time"].AsString() : "");
+                        lab.AddThemeFontSizeOverride("font_size", 12);
+                        lab.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+                        row.AddChild(lab);
+                        var f = file;
+                        var bLoad = new Button(); bLoad.Text = "加载";
+                        bLoad.Pressed += () => { ShowToastText(GameCheats.BoardLoadUi(f, bdParts())); refreshBd(); };
+                        row.AddChild(bLoad);
+                        var bDel = new Button(); bDel.Text = "删除";
+                        bDel.Pressed += () => { ShowToastText(GameCheats.BoardDelete(f)); refreshBd(); };
+                        row.AddChild(bDel);
+                        bdList.AddChild(row);
+                    }
+                };
+
+                var bdSave = new Button();
+                bdSave.Text = "保存当前战场";
+                bdSave.Pressed += () =>
+                {
+                    var r = GameCheats.BoardSaveUi(bdNameEdit.Text.Trim(), bdParts());
+                    bdStatus.Text = r;
+                    ShowToastText(r);
+                    refreshBd();
+                };
+                vbBoard.AddChild(bdSave);
+
+                var bdRefresh = new Button();
+                bdRefresh.Text = "刷新列表";
+                bdRefresh.Pressed += () => { refreshBd(); bdStatus.Text = "已刷新"; };
+                vbBoard.AddChild(bdRefresh);
+                refreshBd();
+
                 // ===== 标签：趣味 =====
                 var vbFun = MakePage("趣味");
                 vbFun.AddChild(Section("趣味"));

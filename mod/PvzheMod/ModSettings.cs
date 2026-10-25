@@ -54,10 +54,121 @@ namespace PvzheMod
         public static bool ZombieNoAttack = false;       // 僵尸无法攻击
         public static bool ZombieNoMove = false;         // 僵尸无法移动
         public static bool GloveMode = false;             // 手套挪动（局中点击植物拿起、点空地放置）
+        public static bool MiddlePickup = true;           // 中键提取植物（手机长按 2 秒）：复制一张卡进卡槽
+        public static bool PickupToHand = false;          // 保留字段（已不自动拿在手上）
         public static bool PlantTriple = false;           // 三倍种植（种一个，同列相邻两行也种）
         public static bool NoCostRise = false;            // 卡价不涨价（金卡/重复购买 costRise=0）
         public static bool ZeroCost = false;              // 零消费（所有卡免费，GetCost=0）
         public static string BulletType = "";            // 自定义子弹类型（PROJECTILE_CONFIG key，空=不生效）
+        // ★ 个体级子弹：只对指定实体（Godot instanceId）生效，形如 "123456:Pea;7890:*"，* = 随机种类
+        // 空字符串 = 不启用（此时代码路径与原来完全一致，不会影响全局子弹逻辑）
+        public static string PerEntityBullet = "";
+        // ★★ 种类级子弹（用户要的「植物/僵尸各自的随机和自定义子弹」）：按卡片 packet id 存。
+        //   形如 "PeaShooter:Pea;ZombieNormal:*"，* = 随机种类。空串 = 不启用（零配置时不影响任何行为）。
+        public static string PerPacketBullet = "";
+
+        /// <summary>key 归一化：只留字母数字并转小写（容错 PeaShooter / peashooter / Pea_Shooter 这类差异）。</summary>
+        static string NormKey(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            var sb = new System.Text.StringBuilder();
+            foreach (var c in s)
+            {
+                if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))
+                    sb.Append((c >= 'A' && c <= 'Z') ? (char)(c + 32) : c);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>取某个种类的子弹配置（key 可以是 packet id / 类名 / saveKey）；没配过返回 null。</summary>
+        public static string GetPerPacketBullet(string key)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(PerPacketBullet)) return null;
+                string nk = NormKey(key);
+                if (nk.Length == 0) return null;
+                int i = 0;
+                while (i < PerPacketBullet.Length)
+                {
+                    int j = PerPacketBullet.IndexOf(';', i);
+                    if (j < 0) j = PerPacketBullet.Length;
+                    int c = PerPacketBullet.IndexOf(':', i);
+                    if (c > i && c < j)
+                    {
+                        string k = NormKey(PerPacketBullet.Substring(i, c - i));
+                        if (k == nk) return PerPacketBullet.Substring(c + 1, j - c - 1);
+                    }
+                    i = j + 1;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>设置 / 清除某个种类的子弹。type 传空 = 清除。key 原样保存（不归一化，方便回看）。</summary>
+        public static void SetPerPacketBullet(string key, string type)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(key)) return;
+                string nk = NormKey(key);
+                var parts = new System.Collections.Generic.List<string>();
+                if (!string.IsNullOrEmpty(PerPacketBullet))
+                {
+                    foreach (var s in PerPacketBullet.Split(';'))
+                    {
+                        if (s.Length == 0) continue;
+                        int c = s.IndexOf(':');
+                        string k = c > 0 ? s.Substring(0, c) : s;
+                        if (NormKey(k) == nk) continue;   // 旧配置剔除
+                        parts.Add(s);
+                    }
+                }
+                if (!string.IsNullOrEmpty(type)) parts.Add(key + ":" + type);
+                PerPacketBullet = string.Join(";", parts.ToArray());
+            }
+            catch { }
+        }
+
+        /// <summary>取某个实体的个体级子弹配置；没配过返回 null。type="*" 表示随机种类。</summary>
+        public static string GetPerEntityBullet(long id)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(PerEntityBullet)) return null;
+                string k = id.ToString() + ":";
+                int i = 0;
+                while (i < PerEntityBullet.Length)
+                {
+                    int j = PerEntityBullet.IndexOf(';', i);
+                    if (j < 0) j = PerEntityBullet.Length;
+                    if (j - i > k.Length && string.CompareOrdinal(PerEntityBullet, i, k, 0, k.Length) == 0)
+                        return PerEntityBullet.Substring(i + k.Length, j - i - k.Length);
+                    i = j + 1;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>设置 / 清除某个实体的个体级子弹。type 传空 = 清除。</summary>
+        public static void SetPerEntityBullet(long id, string type)
+        {
+            try
+            {
+                string prefix = id.ToString() + ":";
+                var parts = new System.Collections.Generic.List<string>();
+                if (!string.IsNullOrEmpty(PerEntityBullet))
+                {
+                    foreach (var s in PerEntityBullet.Split(';'))
+                        if (s.Length > 0 && !s.StartsWith(prefix)) parts.Add(s);
+                }
+                if (!string.IsNullOrEmpty(type)) parts.Add(prefix + type);
+                PerEntityBullet = string.Join(";", parts.ToArray());
+            }
+            catch { }
+        }
         public static bool CanChooseAll = false;          // 所有关卡可选卡（强制 packetBankMethod=CHOOSE）
         public static bool UnlockPackets = false;          // 清除锁定卡牌（战斗中卡牌 _lock=false，独立开关）
         public static bool NoZombieSpawn = false;         // 禁止出僵尸（每帧删除场上僵尸）
@@ -117,6 +228,9 @@ namespace PvzheMod
         // ★ E 组：时停。PC 版按住 Shift 即停（松开恢复）；手机版不绑快捷键。
         public static bool TimeStopKeyEnabled = true;
         public static bool EngineLowRes = false;       // 低配渲染：把窗口渲染分辨率降到 1280 宽（stretch 等比缩放，帧率显著提升）
+        // ★ 性能优化总开关：渲染(MSAA/屏幕空间AA/去色带) + 调度(物理tick/限帧/低处理器占用) + 音频(旁路总线效果器) + 内存(托管堆回收)
+        //   全部由一个开关统一接管，避免子开关被「全关」逻辑清成 false 后主开关空转。
+        public static bool PerfBoost = false;
         /// <summary>是否手动保存过（存档文件带 #manual 标记）。启动时未手动保存过 → 全部功能默认关闭。</summary>
         public static bool ManualSaved;
         private static readonly string SavePath = @"mod\modsettings.txt";
@@ -166,10 +280,14 @@ namespace PvzheMod
                 sb.AppendLine("ZombieNoAttack=" + ZombieNoAttack);
                 sb.AppendLine("ZombieNoMove=" + ZombieNoMove);
                 sb.AppendLine("GloveMode=" + GloveMode);
+                sb.AppendLine("MiddlePickup=" + MiddlePickup);
+                sb.AppendLine("PickupToHand=" + PickupToHand);
                 sb.AppendLine("PlantTriple=" + PlantTriple);
                 sb.AppendLine("NoCostRise=" + NoCostRise);
                 sb.AppendLine("ZeroCost=" + ZeroCost);
                 sb.AppendLine("BulletType=" + BulletType);
+                sb.AppendLine("PerEntityBullet=" + PerEntityBullet);
+                sb.AppendLine("PerPacketBullet=" + PerPacketBullet);
                 sb.AppendLine("CanChooseAll=" + CanChooseAll);
                 sb.AppendLine("UnlockPackets=" + UnlockPackets);
                 sb.AppendLine("NoZombieSpawn=" + NoZombieSpawn);
@@ -214,6 +332,7 @@ namespace PvzheMod
                 sb.AppendLine("VaseRerollOnBreak=" + VaseRerollOnBreak);
                 sb.AppendLine("TimeStopKeyEnabled=" + TimeStopKeyEnabled);
                 sb.AppendLine("EngineLowRes=" + EngineLowRes);
+                sb.AppendLine("PerfBoost=" + PerfBoost);
                 // ===== 补全：主开关/无限资源/ESP/趣味 等持久化（重进游戏保持开启状态） =====
                 sb.AppendLine("Enabled=" + Enabled);
                 sb.AppendLine("FunEnabled=" + FunEnabled);
@@ -300,10 +419,14 @@ namespace PvzheMod
                         case "ZombieNoAttack": if (bool.TryParse(v, out b)) ZombieNoAttack = b; break;
                         case "ZombieNoMove": if (bool.TryParse(v, out b)) ZombieNoMove = b; break;
                         case "GloveMode": if (bool.TryParse(v, out b)) GloveMode = b; break;
+                        case "MiddlePickup": if (bool.TryParse(v, out b)) MiddlePickup = b; break;
+                        case "PickupToHand": if (bool.TryParse(v, out b)) PickupToHand = b; break;
                         case "PlantTriple": if (bool.TryParse(v, out b)) PlantTriple = b; break;
                         case "NoCostRise": if (bool.TryParse(v, out b)) NoCostRise = b; break;
                         case "ZeroCost": if (bool.TryParse(v, out b)) ZeroCost = b; break;
                         case "BulletType": BulletType = v; break;
+                        case "PerEntityBullet": PerEntityBullet = v; break;
+                        case "PerPacketBullet": PerPacketBullet = v; break;
                         case "CanChooseAll": if (bool.TryParse(v, out b)) CanChooseAll = b; break;
                         case "UnlockPackets": if (bool.TryParse(v, out b)) UnlockPackets = b; break;
                         case "NoZombieSpawn": if (bool.TryParse(v, out b)) NoZombieSpawn = b; break;
@@ -348,6 +471,7 @@ namespace PvzheMod
                         case "VaseRerollOnBreak": if (bool.TryParse(v, out b)) VaseRerollOnBreak = b; break;
                         case "TimeStopKeyEnabled": if (bool.TryParse(v, out b)) TimeStopKeyEnabled = b; break;
                         case "EngineLowRes": if (bool.TryParse(v, out b)) EngineLowRes = b; break;
+                        case "PerfBoost": if (bool.TryParse(v, out b)) PerfBoost = b; break;
                         case "Enabled": if (bool.TryParse(v, out b)) Enabled = b; break;
                         case "FunEnabled": if (bool.TryParse(v, out b)) FunEnabled = b; break;
                         case "BGEnabled": if (bool.TryParse(v, out b)) BGEnabled = b; break;
@@ -410,6 +534,7 @@ namespace PvzheMod
             GlobalOverridesEnabled = false;
             TrickEnabled = false; TrickBox = false; TrickRain = false; TrickConveyor = false;
             TrickFixedOnly = false; TrickPool = ""; SeedBankEveryFrame = true; EngineLowRes = false;
+            PerfBoost = false;
         }
 
         /// <summary>彻底全关：所有功能开关（含默认开的美化项）复位 + 数值复位。启动时调用，默认全部关闭。</summary>
@@ -434,7 +559,7 @@ namespace PvzheMod
                    BulletTrack || BulletRandom ||
                    PlantAttackSpeed != 1f || ZombieAttackSpeed != 1f || PlantHP != 1f || ZombieHP != 1f ||
                    PlantInvincible || ZombieInvincible || CharmPlant || CharmZombie ||
-                   PlantNoAttack || ZombieNoAttack || ZombieNoMove || GloveMode || PlantTriple ||
+                   PlantNoAttack || ZombieNoAttack || ZombieNoMove || GloveMode || MiddlePickup || PlantTriple ||
                    NoCostRise || ZeroCost || BulletType.Length > 0 || CanChooseAll ||
                    NoZombieSpawn || BossNoBow || NoThrowImp || CannonNoCooldown || IgnoreHouse ||
                    IgnoreWarningLine || PlantSquash || JellyMode || ForceRain || ForceFog || IgnoreRedLine ||

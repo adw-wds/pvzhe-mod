@@ -72,6 +72,9 @@ namespace PvzheMod
                 ChangeLog.Tick();
 
                 bool loading = CheckSceneLoading(root);
+                // 性能优化：需要 loading 状态 —— 加载期全速跑、稳态省资源（总开关关闭时内部首行即返回）
+                GameCheats.PerfTick(root, loading);
+
                 // 游戏功能：内部已有"全关总开关快速路径"——全关时第一行返回（零遍历零反射）
                 GameCheats.OnFrame(root);
                 // 功能开启提示已移到游戏窗口外（由外置修改器在窗口上方弹出）

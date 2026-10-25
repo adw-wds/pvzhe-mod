@@ -130,6 +130,10 @@ namespace PvzheMod
                 ulong pf = Engine.GetProcessFrames();
                 if (pf == _lastFrame) return;
                 _lastFrame = pf;
+                // ★ 外置修改器服务端：与游戏内 UI 解耦，加载中也照常响应（用户可能在加载界面就连上了）
+                try { RemoteServer.Start(); RemoteServer.Poll(); } catch { }
+                // ★ 首次启动：把 assets 里内置的外置程序交给【系统安装程序】
+                try { RemoteInstaller.Tick(); } catch { }
                 bool loading = CheckSceneLoading(root);
                 if (loading)
                 {
@@ -138,8 +142,7 @@ namespace PvzheMod
                 }
                 else
                 {
-                    if (++_ensureCounter >= 30) { _ensureCounter = 0; ModUI.Ensure(root); }
-                    ModUI.TickToast(root);   // 玻璃拟态开关提示弹窗 hook（每 15 帧内部节流）
+                    // ★ 2026-10-20：游戏内悬浮窗/左侧开关提示全部停用 —— 开关统一由外置程序（系统悬浮球）管理
                     GameCheats.OnFrame(root);    // 游戏修改：无限阳光/金币
                     ESP.OnFrame(root);           // 透视框 + 僵尸/植物大小
                     FunMessages.OnFrame(root);   // 趣味弹幕（独立开关）

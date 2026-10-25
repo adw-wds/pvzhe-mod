@@ -20,6 +20,7 @@ class Program
     //   2026-09-25：0.28.1 → 0.29（0.29 arm64 原版 26,899,968 B / A5BCDD28A8E51E02，
     //   与电脑版同大小但哈希不同 ⇒ 手机版必须单独注入一份）
     //   2026-10-10：0.29 → 0.30（解压目录 CHANGE_ME_ANDROID_APK_DIR）
+    //   2026-10-25：0.30 → 0.31（解压目录 CHANGE_ME_ANDROID_APK_DIR）
     static string gameDir = @"CHANGE_ME_ANDROID_APK_DIR\assets\.godot\mono\publish\arm64";
     static string mainPath = Path.Combine(gameDir, "PlantsVsZombies.dll");
     static string backupPath = mainPath + ".clean";   // 手机版干净原版（首次自动从当前文件备份）

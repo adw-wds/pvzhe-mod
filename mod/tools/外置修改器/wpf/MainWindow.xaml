@@ -1,8 +1,8 @@
-﻿<Window x:Class="PvzheRemote.MainWindow"
+<Window x:Class="PvzheRemote.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:PvzheRemote"
-        Title="杂交版 外置修改器" Width="1120" Height="760" MinWidth="980" MinHeight="640"
+        Title="杂交版 外置修改器" Width="1352" Height="760" MinWidth="1138" MinHeight="640"
         WindowStyle="None" AllowsTransparency="False" Background="#FFFFFF"
         WindowStartupLocation="CenterScreen" ResizeMode="CanResize"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display" Loaded="OnWindowLoaded">

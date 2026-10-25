@@ -9,7 +9,7 @@
 
     <!-- ★ 2026-10-08 修正：原 HintPath 指向 <你的游戏目录>
          ⇒ 826 个 "未能找到类型或命名空间名 Godot"。
-         手机版 APK 解压目录是 CHANGE_ME_ANDROID_APK_DIR（2026-10-10 从 029 改）。
+         手机版 APK 解压目录是 CHANGE_ME_ANDROID_APK_DIR（2026-10-25 从 030 改）。
          换版本时可用 -p:AndroidAssetsDir="...\assets" 覆盖，不用改文件。
          注：两端 GodotSharp MD5 一致（19A6A99060B93CDE32A16DB27D7F475A），所以 mod 代码可直接复用。 -->
     <AndroidAssetsDir Condition="'$(AndroidAssetsDir)' == ''">CHANGE_ME_ANDROID_APK_DIR\assets</AndroidAssetsDir>

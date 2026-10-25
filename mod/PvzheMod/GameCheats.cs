@@ -1259,8 +1259,11 @@ namespace PvzheMod
                     }
                     catch (System.Exception ex) { Bootstrap.Log("ModSettings.Load 异常: " + ex.Message); }
                 }
-                // 引擎渲染优化：首帧锁 60fps + 强制垂直同步（防 GPU 满载/撕裂的全局卡顿），EngineLowRes 时缩小渲染分辨率
-                ApplyEnginePerfOnce();
+                // 引擎渲染优化：★ 2026-10-16 改为【只在用户开了「低配渲染」时才自动应用】。
+                //  原来无条件在首帧就锁 60fps + 强开垂直同步，用户实测「连满帧都到不了」——
+                //  本可跑更高帧的机器被 MOD 悄悄锁死，而 MOD 不该猜引擎调度。
+                //  外置修改器的「立即应用渲染优化」按钮行为不变，由用户显式触发。
+                if (ModSettings.EngineLowRes) ApplyEnginePerfOnce();
                 // 补全加载界面缺的步骤文案（让最耗时的角色资源加载阶段不再显示成「卡在 7/7」）
                 RegisterLoadingTranslations();
                 // ★ 后台预加载 1241 个 gameplay root（利用 OnFrame 比游戏资源加载早 ~24 秒的窗口）
@@ -1414,6 +1417,8 @@ namespace PvzheMod
                     if (ModSettings.ForceFog || ModSettings.CanChooseAll || ModSettings.GloveMode) ApplyForceLevelFeatures(root);
                     return;
                 }
+                // 中键 / 长按提取：复制一张同样的卡进卡槽（只在开关打开时跑）
+                if (ModSettings.MiddlePickup) ApplyMiddlePickup(root);
                 // 共享角色缓存（植物/僵尸，每 60 帧刷新）——所有功能共用，避免各自全树遍历
                 RefreshRoleCache(root);
                 // 炮类/投手一次发射多枚（数量可调，每 30 帧应用一次）
@@ -2198,7 +2203,13 @@ namespace PvzheMod
         static bool _bfFindDiag, _bfFoundDiag, _bfProcDiag, _bfRandomApiDiag, _bfRandomFailDiag;
         static void ApplyBulletModsRuntime(Node root)
         {
-            if (++_bfRunTimer % 2 != 0) return;
+            // ★ 自适应降频：子弹越多，每趟按颗反射越贵。固定「每 2 帧全量遍历」在
+            //   6 万子弹时会把帧率压到 3 帧（用户实测），所以按规模拉长间隔：
+            //   ≤3000 颗仍是每 2 帧（手感无损）；极端场面退到每 30 帧，保帧率优先。
+            int interval = _bfLoopLast > 20000 ? 30
+                         : _bfLoopLast > 8000  ? 12
+                         : _bfLoopLast > 3000  ? 6 : 2;
+            if (++_bfRunTimer % interval != 0) return;
             try
             {
                 if (_cachedBulletField == null || !GodotObject.IsInstanceValid(_cachedBulletField))
@@ -2230,7 +2241,8 @@ namespace PvzheMod
                 if (_bfCountField != null) { try { count = (int)_bfCountField.GetValue(bf); } catch { } }
                 var idxs = _bfIdxField != null ? _bfIdxField.GetValue(bf) as int[] : null;
                 int loop = (idxs != null) ? Math.Min(count, idxs.Length) : arr.Length;
-                _bfRerollCounter++;    // 每 2 帧处理周期 +1（随机失败重试的时钟）
+                _bfLoopLast = loop;    // 自适应降频依据（下一趟按这个规模定间隔）
+                _bfRerollCounter++;    // 每个处理周期 +1（随机失败重试的时钟）
                 bool reroll = false;   // 随机子弹：新子弹 1 帧内随机一次，随机过的飞行中不再重摇（按需求）
                 for (int i = 0; i < loop; i++)
                 {
@@ -2250,7 +2262,7 @@ namespace PvzheMod
                 var boxed = arr.GetValue(idx);
                 if (boxed == null) return;
                 var bt = boxed.GetType();
-                var af = bt.GetField("active", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                var af = BfField(bt, "active");
                 if (af == null) return;
                 bool active = (bool)af.GetValue(boxed);
                 // 子弹死亡/未激活：重置"已随机"标记，同 idx 复活即视为新子弹（发射出来立即随机种类）
@@ -2266,8 +2278,28 @@ namespace PvzheMod
                 }
                 // 随机/自定义种类：基于 config.saveKey 判断是否已随机（idx 复用/子弹池满也可靠）
                 // 已随机锁定（当前种类==上次应用种类）→ 跳过；失败 → RETRY@计数 每 REROLL_GAP 周期重试
-                bool changed = ApplyTrackRuntime(boxed, bt);
-                var cf = bt.GetField("config", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                bool changed = ApplyTrackRuntime(boxed, bt);                // ★ 早退：随机/自定义种类都没开时，整段 config 逻辑（含最贵的 GetCfgKey
+                //   反射链）完全没必要跑 —— 只开「追踪」时这里省掉一大半开销。
+                // ★ 个体级 / 种类级子弹：只在有配置时计算（零配置时零开销，行为与原来完全一致）
+                string perType = null;
+                if (ModSettings.PerEntityBullet.Length > 0 || ModSettings.PerPacketBullet.Length > 0)
+                {
+                    try
+                    {
+                        var pfc = BfField(bt, "fireCharacter");
+                        var owner = pfc != null ? pfc.GetValue(boxed) as Godot.GodotObject : null;
+                        if (owner != null && GodotObject.IsInstanceValid(owner))
+                        {
+                            if (ModSettings.PerEntityBullet.Length > 0)
+                                perType = ModSettings.GetPerEntityBullet((long)owner.GetInstanceId());
+                            if (perType == null && ModSettings.PerPacketBullet.Length > 0)
+                                perType = ResolvePacketBulletFor(owner);
+                        }
+                    }
+                    catch { }
+                }
+                bool needCfg = perType != null || ModSettings.BulletRandom || !string.IsNullOrEmpty(ModSettings.BulletType);
+                var cf = needCfg ? BfField(bt, "config") : null;
                 if (cf != null)
                 {
                     object curCfg = cf.GetValue(boxed);
@@ -2288,14 +2320,21 @@ namespace PvzheMod
                     {
                         // 优先用游戏官方 ChangeBulletData 完整换种类（外观+行为+大小+伤害），
                         // 直接改 config 字段只影响大小（hitBoxScale）外观不变（staticAtlasEntryIndex 是 Spawn 时定的）
-                        object newCfg = RandomProjectileConfig(curCfg);
+                        object newCfg;
+                        if (perType != null && perType != "*")
+                            newCfg = GetProjectileConfigByName(perType);   // 个体级：用户指定的那一种
+                        else if (perType == "*")
+                            newCfg = RandomAnyProjectileConfig(curCfg);    // 个体级：随机种类（不受全局开关影响）
+                        else
+                            newCfg = RandomProjectileConfig(curCfg);
+                        if (newCfg == null) newCfg = curCfg;
                         if (!ReferenceEquals(newCfg, curCfg))
                         {
                             // 读取发射角色（ChangeBulletData 必须传非 null character，否则直接返回 -1 永不生效）
                             object ch = null;
                             try
                             {
-                                var fc = bt.GetField("fireCharacter", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                                var fc = BfField(bt, "fireCharacter");
                                 if (fc != null) ch = fc.GetValue(boxed);
                             }
                             catch { }
@@ -2338,9 +2377,12 @@ namespace PvzheMod
             try
             {
                 if (cfg == null) return null;
-                var v = FindPropOrFieldVal(cfg, "name");
+                // ★ 用缓存的成员访问器（原来走的 FindPropOrFieldVal 每次都要沿基类链
+                //   重新查属性/字段 —— 6 万子弹时这是最大的一笔反射开销）
+                var t = cfg.GetType();
+                var v = BfMemberGet(BfMember(t, "name"), cfg);
                 if (v is string s && !string.IsNullOrEmpty(s)) return s;
-                v = FindPropOrFieldVal(cfg, "saveKey");
+                v = BfMemberGet(BfMember(t, "saveKey"), cfg);
                 if (v is string s2 && !string.IsNullOrEmpty(s2)) return s2;
                 return null;
             }
@@ -2354,7 +2396,7 @@ namespace PvzheMod
             try
             {
                 // trackOpen：追踪开=全追踪；跟随鼠标开=追踪失效；否则保持原值（关闭恢复原版追踪行为）
-                var tof = bt.GetField("trackOpen", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                var tof = BfField(bt, "trackOpen");
                 if (tof != null && tof.FieldType == typeof(bool))
                 {
                     bool cur = (bool)tof.GetValue(boxed);
@@ -2362,7 +2404,7 @@ namespace PvzheMod
                     if (cur != target) { tof.SetValue(boxed, target); changed = true; }
                 }
                 // trackSearchInterval：只有追踪开才每帧重搜；随机子弹发射时方向/种类已定死，不强制每帧重搜（避免卡顿）
-                var tif = bt.GetField("trackSearchInterval", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                var tif = BfField(bt, "trackSearchInterval");
                 if (tif != null && ModSettings.BulletTrack && (int)tif.GetValue(boxed) != 1)
                 { tif.SetValue(boxed, 1); changed = true; }
             }
@@ -2462,6 +2504,86 @@ namespace PvzheMod
         static System.Reflection.FieldInfo _bfDataField;
         static System.Reflection.FieldInfo _bfCountField;
         static System.Reflection.FieldInfo _bfIdxField;
+
+        // ── ★ 子弹反射缓存 ──────────────────────────────────
+        //  ★★ 重大修正（2026-10-16 第二轮）：上一版用 Dictionary<string, X> 且
+        //     key = t.FullName + "|" + name —— Type.FullName 每次调用都会【新建字符串】，
+        //     所以每颗子弹每次查字段都在分配内存。6 万颗 × 6 次查找 × 每秒 30 趟
+        //     ≈ 每秒千万级小字符串 → GC 疯跑、内存涨到 1GB+，帧率反而【比优化前更低】
+        //     （用户实测「比以前更卡、满帧都到不了」）。
+        //     现在改成 Dictionary<Type, Dictionary<string, ...>>：
+        //       外层 key 是 Type（引用比较，零分配）；内层 key 是字段名字面量（驻留字符串，零分配）。
+        //     热路径上彻底零分配。
+        static readonly System.Collections.Generic.Dictionary<Type, System.Collections.Generic.Dictionary<string, System.Reflection.FieldInfo>> _bfFieldCache
+            = new System.Collections.Generic.Dictionary<Type, System.Collections.Generic.Dictionary<string, System.Reflection.FieldInfo>>();
+        static readonly System.Collections.Generic.Dictionary<Type, System.Collections.Generic.Dictionary<string, System.Reflection.MemberInfo>> _bfMemberCache
+            = new System.Collections.Generic.Dictionary<Type, System.Collections.Generic.Dictionary<string, System.Reflection.MemberInfo>>();
+        static int _bfLoopLast;            // 上次处理的活动子弹数（用于自适应降频）
+
+        const System.Reflection.BindingFlags BF_ALL =
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+
+        /// <summary>取字段（沿基类链），结果永久缓存 —— 子弹热路径专用。【零分配】</summary>
+        static System.Reflection.FieldInfo BfField(Type t, string name)
+        {
+            if (t == null) return null;
+            System.Collections.Generic.Dictionary<string, System.Reflection.FieldInfo> m;
+            if (!_bfFieldCache.TryGetValue(t, out m))
+            {
+                m = new System.Collections.Generic.Dictionary<string, System.Reflection.FieldInfo>(System.StringComparer.Ordinal);
+                _bfFieldCache[t] = m;
+            }
+            System.Reflection.FieldInfo fi;
+            if (m.TryGetValue(name, out fi)) return fi;      // name 是字面量：零分配
+            try
+            {
+                for (var ct = t; ct != null && fi == null; ct = ct.BaseType) fi = ct.GetField(name, BF_ALL);
+            }
+            catch { }
+            m[name] = fi;      // 连「查过、没有」也缓存，避免反复做无用查找
+            return fi;
+        }
+
+        /// <summary>取属性（优先）或字段（沿基类链），结果永久缓存 —— 子弹热路径专用。【零分配】</summary>
+        static System.Reflection.MemberInfo BfMember(Type t, string name)
+        {
+            if (t == null) return null;
+            System.Collections.Generic.Dictionary<string, System.Reflection.MemberInfo> m;
+            if (!_bfMemberCache.TryGetValue(t, out m))
+            {
+                m = new System.Collections.Generic.Dictionary<string, System.Reflection.MemberInfo>(System.StringComparer.Ordinal);
+                _bfMemberCache[t] = m;
+            }
+            System.Reflection.MemberInfo mi;
+            if (m.TryGetValue(name, out mi)) return mi;      // name 是字面量：零分配
+            try
+            {
+                for (var ct = t; ct != null && mi == null; ct = ct.BaseType)
+                {
+                    var p = ct.GetProperty(name, BF_ALL);
+                    if (p != null && p.GetIndexParameters().Length == 0) { mi = p; break; }
+                    var f = ct.GetField(name, BF_ALL);
+                    if (f != null) { mi = f; break; }
+                }
+            }
+            catch { }
+            m[name] = mi;
+            return mi;
+        }
+
+        static object BfMemberGet(System.Reflection.MemberInfo mi, object obj)
+        {
+            if (mi == null || obj == null) return null;
+            try
+            {
+                var p = mi as System.Reflection.PropertyInfo;
+                if (p != null) return p.GetValue(obj);
+                var f = mi as System.Reflection.FieldInfo;
+                if (f != null) return f.GetValue(obj);
+            }
+            catch { }
+            return null;
+        }
 
         /// <summary>把 BulletField._data 数组里活动子弹的 pos 向鼠标移动（反射操作 struct 数组，装箱/写回）。</summary>
         static void MoveBulletsToMouse(GodotObject bf)
@@ -3159,6 +3281,103 @@ namespace PvzheMod
             }
             catch { return null; }
         }
+        /// <summary>从发射者节点解析「种类级」子弹：依次试 PacketConfig.saveKey / 节点类名。未命中返回 null。</summary>
+        static bool _pktBulletMissLogged;
+        static string ResolvePacketBulletFor(Godot.GodotObject owner)
+        {
+            try
+            {
+                string sk = ReadPacketSaveKeyOf(owner as Godot.Node);
+                if (sk != null)
+                {
+                    var r = ModSettings.GetPerPacketBullet(sk);
+                    if (r != null) return r;
+                }
+                string cls = owner.GetType().Name;
+                if (cls.StartsWith("TowerDefense", StringComparison.Ordinal)) cls = cls.Substring("TowerDefense".Length);
+                var r2 = ModSettings.GetPerPacketBullet(cls);
+                if (r2 != null) return r2;
+                if (!_pktBulletMissLogged)
+                {
+                    _pktBulletMissLogged = true;
+                    Bootstrap.Log("种类子弹: 未匹配 类名=" + cls + " saveKey=" + (sk ?? "null"));
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>反射读节点上 PacketConfig 字段的 saveKey（与 ESP.ReadVaseContent 同一条已实测路径）。</summary>
+        static string ReadPacketSaveKeyOf(Godot.Node n)
+        {
+            try
+            {
+                if (n == null) return null;
+                var t = n.GetType();
+                while (t != null)
+                {
+                    foreach (var f in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                    {
+                        if (f.FieldType.Name.IndexOf("PacketConfig", StringComparison.Ordinal) < 0) continue;
+                        object cfg = null;
+                        try { cfg = f.GetValue(n); } catch { }
+                        if (cfg == null) continue;
+                        var ct = cfg.GetType();
+                        var sk = ct.GetField("saveKey", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (sk != null)
+                        {
+                            var v = sk.GetValue(cfg);
+                            if (v != null) return v.ToString();
+                        }
+                        var sp = ct.GetProperty("saveKey", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                        if (sp != null)
+                        {
+                            var v = sp.GetValue(cfg, null);
+                            if (v != null) return v.ToString();
+                        }
+                    }
+                    t = t.BaseType;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>按 key 取子弹配置（个体级子弹用）：字典缓存 → 资源路径回退。找不到返回 null。</summary>
+        static object GetProjectileConfigByName(string name)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(name)) return null;
+                if (_rpcGetCfg == null)
+                {
+                    var tdmType = FindType("TowerDefenseManager");
+                    _rpcGetCfg = tdmType != null ? tdmType.GetMethod("GetProjectileConfig", new Type[] { typeof(string) }) : null;
+                }
+                string n = name == "IceCobCannonCob" ? "CobCannonCob" : name;
+                object c = GetProjCfgCached(n);
+                if (c == null) c = LoadProjectileByPath(n);
+                return c;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>无视全局开关，随机换一种子弹配置（个体级「随机子弹」用）。</summary>
+        public static object RandomAnyProjectileConfig(object currentConfig)
+        {
+            try
+            {
+                if (_projKeys == null || _projKeys.Length == 0)
+                {
+                    CacheProjectileKeys();
+                    if (_projKeys == null || _projKeys.Length == 0) return currentConfig;
+                }
+                var c = GetProjectileConfigByName(PickRandomProjectileName());
+                return c ?? currentConfig;
+            }
+            catch { return currentConfig; }
+        }
+
         public static object RandomProjectileConfig(object currentConfig)
         {
             if (!_rpcCalled)
@@ -3504,6 +3723,9 @@ namespace PvzheMod
             try
             {
                 if (string.IsNullOrEmpty(path)) return;
+                // 记住这份关卡定义段 —— 之后在此关内保存阵型时原样保留，
+                // 这样存出来的文件既能"关卡内恢复战场"，也能"关卡外自动进同一关"。
+                try { _lastBoardLevelText = BoardDefinitionSection(BoardReadText(path)); } catch { }
                 if (!ParsePvzLevelFile(path)) return;
                 ModSettings.CustomLevelActive = true;
                 _customLevelInit = false;

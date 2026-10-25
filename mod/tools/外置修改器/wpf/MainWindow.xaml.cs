@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.InteropServices;
@@ -67,10 +68,12 @@ namespace PvzheRemote
             new("entity", "实体属性", "\uE7C3", "game"),
             new("trick",  "篡改",     "\uE70F", "game"),
             new("custom", "自定义",   "\uE790", "game"),
+            new("board",  "布阵器",   "\uE81E", "game"),
             // 网络和 Internet
             new("net",    "联机",     "\uE774", "net"),
             // 应用
             new("scripts","脚本",     "\uE943", "app"),
+            new("mods",   "MOD 管理", "\uE7B8", "app"),
             // 账户
             new("user",   "用户中心", "\uE77B", "acc"),
             // 存储
@@ -86,6 +89,13 @@ namespace PvzheRemote
                 new("ZeroCost", "零消费", "🆓", "switch"),
                 new("NoCostRise", "卡价不涨价", "💹", "switch"),
                 new("CrystalInfinite", "无限水晶", "💎", "switch"),
+                // 一次性动作：调用游戏端 CreateCurrency / AddSun / SpawnAward
+                new("AddSunCustom", "自定义加阳光", "☀️", "action"),
+                new("SpawnSilver", "刷银币", "🪙", "action"),
+                new("SpawnGold", "刷金币", "🟡", "action"),
+                new("SpawnDiamond", "刷钻石", "💎", "action"),
+                new("SpawnPurse", "掉钱袋", "👛", "action"),
+                new("SpawnTrophy", "掉奖杯", "🏆", "action"),
             },
             ["battle"] = new Feat[] {
                 new("PlantInvincible", "植物无敌", "🛡️", "switch"),
@@ -123,6 +133,7 @@ namespace PvzheRemote
                 new("UnlockPackets", "清除锁定卡", "🔓", "switch"),
                 new("IgnoreRedLine", "无视红线", "🚧", "switch"),
                 new("GloveMode", "手套挪动", "🧤", "switch"),
+                new("MiddlePickup", "中键复制到卡槽", "🖱️", "switch"),
             },
             ["zombie"] = new Feat[] {
                 new("NoZombieSpawn", "禁止出僵尸", "🚫", "switch"),
@@ -178,12 +189,16 @@ namespace PvzheRemote
                 new("PerfMode", "性能模式", "🚀", "switch"),
                 new("GlobalOverridesEnabled", "全局属性覆盖", "📋", "switch"),
                 new("BulletType", "自定义子弹", "🧨", "bullet"),
+                new("BulletForPlant", "植物子弹(全部植物)", "🌿", "action"),
+                new("BulletForZombie", "僵尸子弹(全部僵尸)", "🧟", "action"),
                 new("InstantWinAll", "当前关卡通关", "🏁", "action"),
                 new("CompleteAllLevels", "一键通关全部", "👑", "action"),
                 new("CompleteAllDailyLevels", "一键通关每日挑战", "📅", "action"),
                 new("InstantGrow", "成长植物秒熟", "🌱", "switch"),
             },
             ["system"] = new Feat[] {
+                new("PerfBoost", "性能优化(降资源占用)", "🚀", "switch"),
+                new("PerfGc", "回收内存(手动)", "🧹", "action"),
                 new("EngineLowRes", "低配渲染(1280宽)", "🖥️", "switch"),
                 new("ApplyEnginePerf", "立即应用渲染优化", "⚡", "action"),
                 new("GameSpeed", "游戏速度", "🎚️", "slider", 0.5, 20, 0.5, "x"),
@@ -209,6 +224,17 @@ namespace PvzheRemote
             ["scripts"] = Array.Empty<Feat>(),   // 脚本分类：启用脚本动态注入
         };
 
+        // 字段名 → 功能（MOD 端只上报字段名，中文名/图标/单位在外置端翻译，避免两端维护两份名字表）
+        static readonly Dictionary<string, Feat> FeatByName = BuildFeatIndex();
+        static Dictionary<string, Feat> BuildFeatIndex()
+        {
+            var d = new Dictionary<string, Feat>(StringComparer.Ordinal);
+            foreach (var kv in Feats)
+                foreach (var f in kv.Value)
+                    if (!d.ContainsKey(f.Name)) d[f.Name] = f;
+            return d;
+        }
+
         readonly Dictionary<string, ToggleSwitch> _switches = new();
         readonly List<string> _logLines = new();
         readonly DateTime _startTime = DateTime.Now;
@@ -224,11 +250,9 @@ namespace PvzheRemote
         WF.NotifyIcon? _tray;
         readonly DispatcherTimer _autoPoll;
         readonly DispatcherTimer _uptime;
-        Window? _featureTip;
-        DispatcherTimer? _tipTimer;
-        DispatcherTimer? _tipColorTimer;
-        double _tipHue;
-        double _tipOpacity = 1;
+        DispatcherTimer? _evtPoll;          // 功能开关变化轮询（300ms）：拉 MOD 端事件 → 弹 RTX 风格卡片
+        int _lastEvtSeq = -1;               // 已消费到的事件序号；-1 = 尚未同步（首次只取序号，不弹历史）
+        bool _evtBusy;
         bool _debugMode;
         Window? _debugWin;
         TextBlock? _debugTb;
@@ -271,6 +295,9 @@ namespace PvzheRemote
             _autoPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
             _autoPoll.Tick += async (s, e) => await OnAutoPoll();
             _autoPoll.Start();
+
+            // ★ 右上角弹窗卡片已按要求整体移除（ToastHost.cs → ToastHost.cs.disabled）：
+            //   事件轮询 _evtPoll / --toast-demo 演示一并停用，屏幕上不再有任何右上角提示。
             _debugSink = DebugLog;   // 静态 HTTP 层日志 → 实例调试终端
         }
 
@@ -568,7 +595,364 @@ namespace PvzheRemote
             else if (key == "entity") ShowEntities();
             else if (key == "user") ShowUserCenter();
             else if (key == "log") ShowLog();
+            else if (key == "board") ShowBoard();
+            else if (key == "mods") ShowMods();
             else ShowFeatures(key);
+        }
+
+        // ================= MOD 管理（纯客户端：只读写游戏的 Mods 目录） =================
+        // 目录与格式依据（复用 ModAgent 里已实测的 GameInstallTool）：
+        //   user://Mods/  →  %APPDATA%\Godot\app_userdata\植物大战僵尸杂交版\Mods\
+        //   启用状态     →  同目录 enabled_mods.json（JSON 字符串数组，元素是 mod id）
+        //   解压缓存     →  同级 ModsCache\<id>\，★ 游戏不会覆盖旧缓存，重装必须清
+        // ★ 导入/启停后必须重启游戏：官方加载链在启动时一次性读 enabled_mods.json。
+        const string ModUserDirName = "植物大战僵尸杂交版";
+
+        static string ModsDirPath()
+        {
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            return Path.Combine(appData, "Godot", "app_userdata", ModUserDirName, "Mods");
+        }
+
+        static string ModCacheDirPath()
+        {
+            var d = ModsDirPath();
+            var parent = Directory.GetParent(d.TrimEnd(Path.DirectorySeparatorChar));
+            return parent == null ? "" : Path.Combine(parent.FullName, "ModsCache");
+        }
+
+        static List<string> ReadEnabledMods(string modsDir)
+        {
+            var p = Path.Combine(modsDir, "enabled_mods.json");
+            if (!File.Exists(p)) return new List<string>();
+            try
+            {
+                var list = JsonSerializer.Deserialize<List<string>>(File.ReadAllText(p));
+                return list ?? new List<string>();
+            }
+            catch (Exception ex) { LogStatic("读 enabled_mods.json 失败（按空表处理）: " + ex.Message); return new List<string>(); }
+        }
+
+        static void WriteEnabledMods(string modsDir, List<string> ids)
+        {
+            Directory.CreateDirectory(modsDir);
+            var ordered = ids.Where(x => !string.IsNullOrWhiteSpace(x))
+                             .Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
+            File.WriteAllText(Path.Combine(modsDir, "enabled_mods.json"),
+                JsonSerializer.Serialize(ordered, new JsonSerializerOptions { WriteIndented = true }));
+        }
+
+        /// <summary>删掉某个 mod 的解压缓存。目录名可能是纯 id，也可能带 -HASH 后缀，两者都算。</summary>
+        static int ClearModCache(string modId)
+        {
+            var cache = ModCacheDirPath();
+            if (string.IsNullOrEmpty(cache) || !Directory.Exists(cache)) return 0;
+            int n = 0;
+            foreach (var dir in Directory.GetDirectories(cache))
+            {
+                var name = Path.GetFileName(dir);
+                if (!name.Equals(modId, StringComparison.OrdinalIgnoreCase) &&
+                    !name.StartsWith(modId + "-", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                try { Directory.Delete(dir, true); n++; }
+                catch { /* 被游戏占用就跳过：重启后游戏会自己重新解压 */ }
+            }
+            return n;
+        }
+
+        /// <summary>从 .pmod 里读 mod.json 的 id（不信任文件名）。不是合法 pmod 返回 null。</summary>
+        static string ReadPmodId(string pmodPath)
+        {
+            try
+            {
+                using var zip = System.IO.Compression.ZipFile.OpenRead(pmodPath);
+                var e = zip.Entries.FirstOrDefault(x =>
+                    string.Equals(x.FullName, "mod.json", StringComparison.OrdinalIgnoreCase));
+                if (e == null) return null;
+                using var sr = new StreamReader(e.Open(), Encoding.UTF8);
+                using var doc = JsonDocument.Parse(sr.ReadToEnd());
+                if (doc.RootElement.TryGetProperty("id", out var idEl))
+                {
+                    var id = idEl.GetString();
+                    return string.IsNullOrWhiteSpace(id) ? null : id.Trim();
+                }
+            }
+            catch { /* 包损坏/不是 zip：当作“不合法”交给调用方提示 */ }
+            return null;
+        }
+
+        static string FmtSize(long bytes)
+        {
+            if (bytes >= 1024 * 1024) return (bytes / 1024.0 / 1024.0).ToString("0.0", CultureInfo.InvariantCulture) + " MB";
+            if (bytes >= 1024) return (bytes / 1024.0).ToString("0.0", CultureInfo.InvariantCulture) + " KB";
+            return bytes + " B";
+        }
+
+        static void LogStatic(string msg)
+        {
+            try { _inst?.Log(msg); } catch { }
+        }
+
+        void ShowMods()
+        {
+            ContentPanel.Children.Clear();
+            var page = new StackPanel { Margin = new Thickness(8, 4, 8, 4) };
+
+            var head = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
+            head.Children.Add(MakeText("MOD 管理", 20, FontWeights.Bold, (Brush)FindResource("TextBrush")));
+            var btnImport = MakeMiniBtn("导入 MOD…");
+            btnImport.Margin = new Thickness(16, 0, 6, 0);
+            btnImport.VerticalAlignment = VerticalAlignment.Center;
+            head.Children.Add(btnImport);
+            var btnRefresh = MakeMiniBtn("刷新");
+            btnRefresh.Margin = new Thickness(0, 0, 6, 0);
+            btnRefresh.VerticalAlignment = VerticalAlignment.Center;
+            head.Children.Add(btnRefresh);
+            var btnDir = MakeMiniBtn("打开目录");
+            btnDir.VerticalAlignment = VerticalAlignment.Center;
+            head.Children.Add(btnDir);
+            page.Children.Add(head);
+
+            page.Children.Add(MakeText(
+                "支持 .pmod 与 .zip（一个 zip 里的每个 .pmod 都会装上；包里没有 .pmod 的直接跳过）。" +
+                "导入/启停后需要重启游戏才生效 —— 官方加载链只在启动时读取一次。",
+                11, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 0, 0, 10), true));
+
+            var stat = MakeText("", 11, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 0, 0, 10), true);
+            page.Children.Add(stat);
+
+            var list = new StackPanel();
+            page.Children.Add(list);
+
+            ContentPanel.Children.Add(page);
+            AnimateIn(page);
+
+            btnImport.Click += async (s, e) => await ImportModsAsync(list, stat);
+            btnRefresh.Click += (s, e) => RefreshModList(list, stat);
+            btnDir.Click += (s, e) =>
+            {
+                try
+                {
+                    var d = ModsDirPath();
+                    Directory.CreateDirectory(d);
+                    Process.Start(new ProcessStartInfo("explorer.exe", "\"" + d + "\"") { UseShellExecute = true });
+                }
+                catch (Exception ex) { MessageBox.Show("打开目录失败：" + ex.Message, "错误"); }
+            };
+
+            RefreshModList(list, stat);
+        }
+
+        void RefreshModList(StackPanel list, TextBlock stat)
+        {
+            list.Children.Clear();
+            var modsDir = ModsDirPath();
+            var enabled = ReadEnabledMods(modsDir);
+            var files = Directory.Exists(modsDir)
+                ? Directory.GetFiles(modsDir, "*.pmod").OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList()
+                : new List<string>();
+
+            int on = files.Count(f => enabled.Any(x =>
+                string.Equals(x, Path.GetFileNameWithoutExtension(f), StringComparison.OrdinalIgnoreCase)));
+            stat.Text = "目录：" + modsDir + "\n共 " + files.Count + " 个，已启用 " + on + " 个";
+
+            if (files.Count == 0)
+            {
+                var empty = MakePanel();
+                empty.Child = MakeText("还没有装任何 MOD。点「导入 MOD…」选 .pmod 或 .zip。",
+                                       12, FontWeights.Normal, (Brush)FindResource("SubBrush"));
+                list.Children.Add(empty);
+                return;
+            }
+
+            foreach (var f in files)
+            {
+                var id = Path.GetFileNameWithoutExtension(f);
+                bool isOn = enabled.Any(x => string.Equals(x, id, StringComparison.OrdinalIgnoreCase));
+                list.Children.Add(MakeModCard(f, id, isOn, list, stat));
+            }
+        }
+
+        Border MakeModCard(string file, string id, bool on, StackPanel list, TextBlock stat)
+        {
+            var card = MakePanel();
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            long bytes = 0;
+            try { bytes = new FileInfo(file).Length; } catch { }
+
+            var left = new StackPanel();
+            left.Children.Add(MakeText(id, 13, FontWeights.Bold, (Brush)FindResource("TextBrush")));
+            left.Children.Add(MakeText(Path.GetFileName(file) + "    " + FmtSize(bytes)
+                                       + (on ? "    · 已启用" : "    · 未启用"),
+                                       10, FontWeights.Normal,
+                                       on ? (Brush)FindResource("AccentBrush") : (Brush)FindResource("SubBrush"),
+                                       new Thickness(0, 4, 0, 0)));
+            grid.Children.Add(left);
+
+            var btns = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var b1 = MakeMiniBtn(on ? "停用" : "启用");
+            b1.Margin = new Thickness(0, 0, 6, 0);
+            b1.Click += (s, e) =>
+            {
+                var modsDir = ModsDirPath();
+                var ids = ReadEnabledMods(modsDir);
+                if (on) ids.RemoveAll(x => string.Equals(x, id, StringComparison.OrdinalIgnoreCase));
+                else if (!ids.Any(x => string.Equals(x, id, StringComparison.OrdinalIgnoreCase))) ids.Add(id);
+                try
+                {
+                    WriteEnabledMods(modsDir, ids);
+                    Log("[MOD] " + (on ? "已停用 " : "已启用 ") + id + "（重启游戏生效）");
+                    RefreshModList(list, stat);
+                }
+                catch (Exception ex) { MessageBox.Show("写入 enabled_mods.json 失败：" + ex.Message, "错误"); }
+            };
+            btns.Children.Add(b1);
+
+            var b2 = MakeMiniBtn("卸载");
+            b2.Click += (s, e) =>
+            {
+                if (MessageBox.Show("卸载 " + id + "？\n\n会删除 .pmod 包、从启用列表移除，并清掉它的解压缓存。",
+                                    "确认卸载", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
+                    return;
+                try
+                {
+                    var modsDir = ModsDirPath();
+                    if (File.Exists(file)) File.Delete(file);
+                    var ids = ReadEnabledMods(modsDir);
+                    ids.RemoveAll(x => string.Equals(x, id, StringComparison.OrdinalIgnoreCase));
+                    WriteEnabledMods(modsDir, ids);
+                    int cleared = ClearModCache(id);
+                    Log("[MOD] 已卸载 " + id + "（清理缓存 " + cleared + " 项），重启游戏生效");
+                    RefreshModList(list, stat);
+                }
+                catch (Exception ex) { MessageBox.Show("卸载失败：" + ex.Message, "错误"); }
+            };
+            btns.Children.Add(b2);
+
+            Grid.SetColumn(btns, 1);
+            grid.Children.Add(btns);
+            card.Child = grid;
+            return card;
+        }
+
+        async Task ImportModsAsync(StackPanel list, TextBlock stat)
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "导入 MOD（可多选 .pmod / .zip）",
+                Filter = "MOD 包或压缩包|*.pmod;*.zip|MOD 包 (*.pmod)|*.pmod|压缩包 (*.zip)|*.zip",
+                Multiselect = true,
+            };
+            if (dlg.ShowDialog() != true) return;
+
+            // 解压/拷贝放后台线程：几百 MB 的 zip 在 UI 线程上做会直接把窗口卡死
+            var paths = dlg.FileNames;
+            var r = await Task.Run(() => DoImport(paths));
+
+            RefreshModList(list, stat);
+            Log("[MOD] 导入完成：成功 " + r.installed + "，跳过 " + r.skippedZip + "，失败 " + r.failed);
+
+            var sb = new StringBuilder();
+            sb.AppendLine("成功导入 " + r.installed + " 个 MOD");
+            if (r.skippedZip > 0) sb.AppendLine("跳过 " + r.skippedZip + " 个不含 .pmod 的压缩包");
+            if (r.failed > 0) sb.AppendLine("失败 " + r.failed + " 个");
+            foreach (var m in r.notes.Take(8)) sb.AppendLine("· " + m);
+            sb.AppendLine();
+            sb.AppendLine(r.installed > 0 ? "已加入启用列表 —— 重启游戏后生效。" : "没有导入任何 MOD。");
+            MessageBox.Show(sb.ToString(), "导入结果", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        /// <summary>真正干活的循环（后台线程）。**不能碰任何 UI 控件**。</summary>
+        (int installed, int skippedZip, int failed, List<string> notes) DoImport(string[] paths)
+        {
+            int installed = 0, skippedZip = 0, failed = 0;
+            var notes = new List<string>();
+
+            foreach (var path in paths)
+            {
+                try
+                {
+                    if (path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var tmp = Path.Combine(Path.GetTempPath(), "pvzmod_import_" + Guid.NewGuid().ToString("N"));
+                        Directory.CreateDirectory(tmp);
+                        int found = 0;
+                        try
+                        {
+                            using (var zip = System.IO.Compression.ZipFile.OpenRead(path))
+                            {
+                                foreach (var e in zip.Entries)
+                                {
+                                    if (string.IsNullOrEmpty(e.Name)) continue;
+                                    if (!e.Name.EndsWith(".pmod", StringComparison.OrdinalIgnoreCase)) continue;
+                                    var outPath = Path.Combine(tmp, e.Name);
+                                    var full = Path.GetFullPath(outPath);
+                                    // 防目录穿越：zip 里的条目名不可信
+                                    if (!full.StartsWith(Path.GetFullPath(tmp), StringComparison.OrdinalIgnoreCase)) continue;
+                                    e.ExtractToFile(outPath, true);
+                                    found++;
+                                }
+                            }
+
+                            if (found == 0)
+                            {
+                                skippedZip++;
+                                notes.Add("跳过（包内没有 .pmod）：" + Path.GetFileName(path));
+                            }
+                            else
+                            {
+                                foreach (var pm in Directory.GetFiles(tmp, "*.pmod"))
+                                {
+                                    var err = InstallOneMod(pm);
+                                    if (err == null) installed++; else { failed++; notes.Add(err); }
+                                }
+                            }
+                        }
+                        finally
+                        {
+                            try { Directory.Delete(tmp, true); } catch { /* 临时目录删不掉不影响结果 */ }
+                        }
+                    }
+                    else
+                    {
+                        var err = InstallOneMod(path);
+                        if (err == null) installed++; else { failed++; notes.Add(err); }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    notes.Add("失败：" + Path.GetFileName(path) + " —— " + ex.Message);
+                }
+            }
+
+            return (installed, skippedZip, failed, notes);
+        }
+
+        /// <summary>装一个 .pmod：读 id → 拷到 Mods\&lt;id&gt;.pmod → 清缓存 → 写启用。成功返回 null，失败返回原因。</summary>
+        string InstallOneMod(string pmodPath)
+        {
+            var id = ReadPmodId(pmodPath);
+            if (string.IsNullOrEmpty(id))
+                return "跳过（不是合法 .pmod：缺少 mod.json 或没有 id）：" + Path.GetFileName(pmodPath);
+
+            var modsDir = ModsDirPath();
+            Directory.CreateDirectory(modsDir);
+            var target = Path.Combine(modsDir, id + ".pmod");
+            File.Copy(pmodPath, target, true);
+
+            // ★ 顺序不能反：先拷新包，再清缓存。游戏只在缓存缺失时才解压。
+            ClearModCache(id);
+
+            var ids = ReadEnabledMods(modsDir);
+            if (!ids.Any(x => string.Equals(x, id, StringComparison.OrdinalIgnoreCase))) ids.Add(id);
+            WriteEnabledMods(modsDir, ids);
+
+            // 本方法运行在后台线程：**不能**调 Log()（它会写 UI 控件），结果由调用方汇总后再记
+            return null;
         }
 
         void AnimateIn(FrameworkElement el)
@@ -1178,6 +1562,154 @@ namespace PvzheRemote
             else { Log("加入卡槽失败: " + id); }
         }
 
+        /// <summary>种类级子弹：type="*" 随机；type="" 恢复跟随全局。</summary>
+        async Task SetPacketBulletAsync(string id, string name, string type)
+        {
+            var r = await GetAsync("/cmd?name=SetPacketBullet&id=" + Uri.EscapeDataString(id) + "&type=" + Uri.EscapeDataString(type));
+            if (r != null)
+            {
+                Log(type == "*" ? ("「" + name + "」随机子弹 已开启") : ("「" + name + "」子弹 恢复默认"));
+                SetStatus(true, "已连接");
+            }
+            else { Log("设置子弹失败（未连接）"); SetStatus(false, "未连接"); }
+        }
+
+        /// <summary>全部植物/僵尸共用一个子弹：选中 = 设全局 BulletType（所有植物子弹都变）。</summary>
+        async void OpenGlobalBulletPicker(string title)
+        {
+            var w = new Window
+            {
+                Title = title,
+                Width = 900,
+                Height = 620,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = IsLoaded ? this : null,
+            };
+            var root = new DockPanel();
+            var head = MakeText(title + " —— 选中后所有植物/僵尸的子弹一起变", 13, FontWeights.Bold, (Brush)FindResource("AccentBrush"));
+            head.Margin = new Thickness(16, 14, 16, 8);
+            DockPanel.SetDock(head, Dock.Top);
+            root.Children.Add(head);
+            var wrap = new WrapPanel { Margin = new Thickness(16, 0, 16, 16) };
+            root.Children.Add(new ScrollViewer { Content = wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+            w.Content = root;
+            w.Show();
+
+            void Add(string disp, string key, int mode)   // mode 0=指定子弹 1=随机 2=默认
+            {
+                var card = new Border
+                {
+                    Background = (Brush)FindResource("CardBrushW"),
+                    BorderBrush = (Brush)FindResource("BorderBrush"),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(10),
+                    Padding = new Thickness(12, 9, 12, 9),
+                    Margin = new Thickness(0, 0, 8, 8),
+                    Width = 200,
+                    Cursor = System.Windows.Input.Cursors.Hand,
+                };
+                var sp = new StackPanel();
+                var t = MakeText(disp, 13, FontWeights.Bold, (Brush)FindResource("TextBrush"));
+                t.TextTrimming = TextTrimming.CharacterEllipsis;
+                sp.Children.Add(t);
+                if (mode == 0)
+                    sp.Children.Add(MakeText(key, 9, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 2, 0, 0)));
+                card.Child = sp;
+                card.MouseLeftButtonUp += async (s, e) =>
+                {
+                    if (mode == 2)
+                    {
+                        await SetField("BulletType", "自定义子弹", "");
+                        await SetField("BulletRandom", "随机子弹", "");
+                        Log("子弹：已恢复默认（所有植物不变）");
+                    }
+                    else if (mode == 1) await SetField("BulletRandom", "随机子弹", "1");
+                    else await SetField("BulletType", "自定义子弹", key);
+                    w.Close();
+                };
+                wrap.Children.Add(card);
+            }
+
+            Add("默认（不改）", "", 2);
+            Add("随机子弹（全部植物）", "*", 1);
+            var r = await GetAsync("/bullettypes");
+            if (r == null || !r.StartsWith("["))
+            {
+                wrap.Children.Add(MakeText("未连接（先开游戏进关卡）", 12, FontWeights.Normal, (Brush)FindResource("SubBrush")));
+                return;
+            }
+            try
+            {
+                foreach (var el in JsonSerializer.Deserialize<JsonElement>(r).EnumerateArray())
+                {
+                    string k = el.TryGetProperty("key", out var kp) ? (kp.GetString() ?? "") : "";
+                    string n = el.TryGetProperty("name", out var np) ? (np.GetString() ?? k) : k;
+                    if (k.Length > 0) Add(n, k, 0);
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>关卡页：先选一种植物/僵尸，再给它设自己的子弹（自定义 / 随机 / 默认）。</summary>
+        async void OpenPacketBulletPicker(bool plant)
+        {
+            var w = new Window
+            {
+                Title = plant ? "植物单独子弹" : "僵尸单独子弹",
+                Width = 960,
+                Height = 640,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = IsLoaded ? this : null,
+            };
+            var root = new DockPanel();
+            var head = MakeText(plant ? "点一个植物 → 给它设子弹（只影响这一种植物）" : "点一个僵尸 → 给它设子弹（只影响这一种僵尸）",
+                                13, FontWeights.Bold, (Brush)FindResource("AccentBrush"));
+            head.Margin = new Thickness(16, 14, 16, 8);
+            DockPanel.SetDock(head, Dock.Top);
+            root.Children.Add(head);
+            var wrap = new WrapPanel { Margin = new Thickness(16, 0, 16, 16) };
+            root.Children.Add(new ScrollViewer { Content = wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+            w.Content = root;
+            w.Show();
+
+            var r = await GetAsync("/packets?type=" + (plant ? "plant" : "zombie"));
+            if (r == null || !r.StartsWith("["))
+            {
+                wrap.Children.Add(MakeText("未连接或拿不到列表（先开游戏进关卡）", 12, FontWeights.Normal, (Brush)FindResource("SubBrush")));
+                return;
+            }
+            try
+            {
+                foreach (var el in JsonSerializer.Deserialize<JsonElement>(r).EnumerateArray())
+                {
+                    string id = el.TryGetProperty("id", out var ip) ? (ip.GetString() ?? "") : "";
+                    string nm = el.TryGetProperty("name", out var np) ? (np.GetString() ?? id) : id;
+                    if (id.Length == 0) continue;
+                    string capId = id, capNm = nm;
+                    var card = new Border
+                    {
+                        Background = (Brush)FindResource("CardBrushW"),
+                        BorderBrush = (Brush)FindResource("BorderBrush"),
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(10),
+                        Padding = new Thickness(12, 8, 12, 8),
+                        Margin = new Thickness(0, 0, 8, 8),
+                        Width = 210,
+                        Cursor = System.Windows.Input.Cursors.Hand,
+                    };
+                    var sp = new StackPanel();
+                    var t1 = MakeText(capNm, 13, FontWeights.Bold, (Brush)FindResource("TextBrush"));
+                    t1.TextTrimming = TextTrimming.CharacterEllipsis;
+                    sp.Children.Add(t1);
+                    sp.Children.Add(MakeText(capId, 9, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 2, 0, 0)));
+                    card.Child = sp;
+                    card.MouseLeftButtonUp += (s, e) => { w.Close(); OpenBulletPicker(capId, capNm, true); };
+                    wrap.Children.Add(card);
+                }
+            }
+            catch { }
+        }
+
         async Task LoadBulletOptions(string name, string zh, WrapPanel wp)
         {
             var r = await GetAsync("/bullettypes");
@@ -1312,10 +1844,10 @@ namespace PvzheRemote
             var about = MakePanel();
             var aboutSp = new StackPanel();
             aboutSp.Children.Add(MakeText("关于", 14, FontWeights.Bold, (Brush)FindResource("AccentBrush")));
-            aboutSp.Children.Add(MakeText("DLL 注入型辅助 Mod · 植物大战僵尸杂交版 0.26.1", 11, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 6, 0, 0)));
+            aboutSp.Children.Add(MakeText("DLL 注入型辅助 Mod · 植物大战僵尸杂交版 0.31", 11, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 6, 0, 0)));
             // ★ 版本号约定：用**当天日期**，格式 yy.M.d（如 26.9.14）。
             //   每次发布都改成当天日期，方便用户对版本（之前写死 "1.4" 看不出来是哪天的）。
-            aboutSp.Children.Add(InfoRow("Mod 版本", "外置修改器 26.9.15"));
+            aboutSp.Children.Add(InfoRow("Mod 版本", "外置修改器 26.10.25"));
             aboutSp.Children.Add(InfoRow("作者", "小晓Air"));
             var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0) };
             var biliBtn = MakeMiniBtn("B 站主页");
@@ -1375,6 +1907,267 @@ namespace PvzheRemote
             vt.TextWrapping = TextWrapping.Wrap;
             r.Children.Add(vt);
             return r;
+        }
+
+        // ================= 布阵器（战场快照：保存 / 加载 / 分享） =================
+        // 8 个可勾选内容分区，顺序与 MOD 端 GameCheats.BoardSnapshot.AllParts 保持一致
+        static readonly string[,] BoardPartDefs =
+        {
+            { "map",      "关卡地图" },
+            { "plant",    "植物" },
+            { "plantst",  "植物状态" },
+            { "zombie",   "僵尸" },
+            { "zombiest", "僵尸状态" },
+            { "sun",      "阳光" },
+            { "wave",     "波次" },
+            { "mower",    "小推车" },
+        };
+        readonly Dictionary<string, CheckBox> _boardChecks = new();
+        TextBox? _boardNameBox;
+        TextBlock? _boardStatus;
+        StackPanel? _boardList;
+
+        /// <summary>把勾选项拼成 MOD 端要的逗号串（空串 = MOD 端视为全选）。</summary>
+        string BoardCheckedParts()
+        {
+            var sb = new StringBuilder();
+            for (int i = 0; i < BoardPartDefs.GetLength(0); i++)
+            {
+                var id = BoardPartDefs[i, 0];
+                CheckBox? cb;
+                if (!_boardChecks.TryGetValue(id, out cb) || cb == null || cb.IsChecked != true) continue;
+                if (sb.Length > 0) sb.Append(',');
+                sb.Append(id);
+            }
+            return sb.ToString();
+        }
+
+        void ShowBoard()
+        {
+            ContentPanel.Children.Clear();
+            var page = new StackPanel { Margin = new Thickness(8, 4, 8, 4) };
+
+            var head = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 14) };
+            var headText = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            headText.Children.Add(MakeText("布阵器", 20, FontWeights.Bold, (Brush)FindResource("TextBrush")));
+            headText.Children.Add(MakeText("整个战场存成 .pvzlevel 快照 · 关卡内直接铺开 · 关卡外自动进同一关 · 文件可分享", 11, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 4, 0, 0)));
+            head.Children.Add(headText);
+            page.Children.Add(head);
+
+            // ---- ① 保存当前战场 ----
+            var saveCard = MakePanel();
+            var saveSp = new StackPanel();
+            saveSp.Children.Add(MakeText("保存当前战场", 14, FontWeights.Bold, (Brush)FindResource("AccentBrush")));
+            saveSp.Children.Add(MakeText("勾选要保存的内容：没勾的部分不写进快照，加载时也不会被覆盖。", 10, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 3, 0, 0)));
+            _boardNameBox = new TextBox { Style = (Style)FindResource("GlassTextBox"), Width = 280, FontSize = 12, Margin = new Thickness(0, 10, 0, 0), ToolTip = "留空 = 按时间自动命名" };
+            saveSp.Children.Add(_boardNameBox);
+
+            var checkWrap = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+            _boardChecks.Clear();
+            for (int i = 0; i < BoardPartDefs.GetLength(0); i++)
+            {
+                var id = BoardPartDefs[i, 0];
+                var cb = MakeSaveCheckBox(BoardPartDefs[i, 1], id);
+                cb.IsChecked = true;
+                cb.Margin = new Thickness(0, 4, 16, 4);
+                _boardChecks[id] = cb;
+                checkWrap.Children.Add(cb);
+            }
+            saveSp.Children.Add(checkWrap);
+
+            var saveBtns = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };
+            var saveBtn = MakeMiniBtn("保存当前战场");
+            saveBtn.Click += async (s, e) => await DoBoardSave();
+            var allBtn = MakeMiniBtn("全选");
+            allBtn.Margin = new Thickness(8, 0, 0, 0);
+            allBtn.Click += (s, e) => { foreach (var c in _boardChecks.Values) c.IsChecked = true; };
+            var noneBtn = MakeMiniBtn("全不选");
+            noneBtn.Margin = new Thickness(8, 0, 0, 0);
+            noneBtn.Click += (s, e) => { foreach (var c in _boardChecks.Values) c.IsChecked = false; };
+            saveBtns.Children.Add(saveBtn); saveBtns.Children.Add(allBtn); saveBtns.Children.Add(noneBtn);
+            saveSp.Children.Add(saveBtns);
+
+            _boardStatus = MakeText("就绪。保存 / 加载 / 导入的结果都会显示在这里。", 11, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 10, 0, 0), true);
+            saveSp.Children.Add(_boardStatus);
+            saveCard.Child = saveSp;
+            page.Children.Add(saveCard);
+
+            // ---- ② 已保存的阵型 ----
+            var listCard = MakePanel();
+            var listSp = new StackPanel();
+            var listHead = new StackPanel { Orientation = Orientation.Horizontal };
+            var listTitle = MakeText("已保存的阵型", 14, FontWeights.Bold, (Brush)FindResource("AccentBrush"));
+            listTitle.VerticalAlignment = VerticalAlignment.Center;
+            listHead.Children.Add(listTitle);
+            var refreshBtn = MakeMiniBtn("刷新");
+            refreshBtn.Margin = new Thickness(14, 0, 0, 0);
+            refreshBtn.Click += async (s, e) => await RefreshBoardList();
+            var importBtn = MakeMiniBtn("导入分享文件");
+            importBtn.Margin = new Thickness(8, 0, 0, 0);
+            importBtn.Click += (s, e) => ImportBoardFile();
+            listHead.Children.Add(refreshBtn);
+            listHead.Children.Add(importBtn);
+            listSp.Children.Add(listHead);
+            listSp.Children.Add(MakeText("「加载」＝ 关卡内直接铺开 / 关卡外自动进同一关　　「导出」＝ 复制到游戏目录 board_export\\ 分享给别人", 10, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 3, 0, 0)));
+
+            _boardList = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+            _boardList.Children.Add(MakeText("读取中…", 11, FontWeights.Normal, (Brush)FindResource("SubBrush")));
+            listSp.Children.Add(_boardList);
+            listCard.Child = listSp;
+            page.Children.Add(listCard);
+
+            ContentPanel.Children.Add(page);
+            AnimateIn(page);
+            _ = RefreshBoardList();
+        }
+
+        void SetBoardStatus(string text)
+        {
+            if (_boardStatus != null) _boardStatus.Text = text;
+            Log("布阵器: " + text);
+        }
+
+        sealed record BoardRow(string File, string Name, string Time, string Parts, int Plants, int Zombies, long Sun);
+
+        static List<BoardRow> ParseBoardRows(string json)
+        {
+            var res = new List<BoardRow>();
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return res;
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                string S(string k) { return e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? (v.GetString() ?? "") : ""; }
+                int I(string k) { return e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : 0; }
+                long L(string k) { return e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt64() : -1; }
+                var f = S("file");
+                if (string.IsNullOrEmpty(f)) continue;
+                res.Add(new BoardRow(f, S("name"), S("time"), S("parts"), I("plants"), I("zombies"), L("sun")));
+            }
+            return res;
+        }
+
+        async Task RefreshBoardList()
+        {
+            var list = _boardList;
+            if (list == null) return;
+            var r = await GetAsync("/cmd?name=BoardList");
+            if (list != _boardList) return;                      // 期间切走了页面，别写回
+            list.Children.Clear();
+            if (string.IsNullOrEmpty(r))
+            {
+                list.Children.Add(MakeText("读取失败：MOD 未连接（先把游戏开起来）。", 11, FontWeights.Normal, (Brush)FindResource("DangerBrush")));
+                return;
+            }
+            List<BoardRow> rows;
+            try { rows = ParseBoardRows(r); }
+            catch (Exception ex)
+            {
+                list.Children.Add(MakeText("解析失败：" + ex.Message, 11, FontWeights.Normal, (Brush)FindResource("DangerBrush"), null, true));
+                return;
+            }
+            if (rows.Count == 0)
+            {
+                list.Children.Add(MakeText("还没有保存过阵型。进游戏摆好阵、填个名字，点上面「保存当前战场」。", 11, FontWeights.Normal, (Brush)FindResource("SubBrush"), null, true));
+                return;
+            }
+            foreach (var row in rows) list.Children.Add(MakeBoardRow(row));
+        }
+
+        UIElement MakeBoardRow(BoardRow row)
+        {
+            var bd = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF)),
+                BorderBrush = (Brush)FindResource("LineBrush"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(3),
+                Padding = new Thickness(12, 8, 12, 8),
+                Margin = new Thickness(0, 0, 0, 6),
+            };
+            var sp = new StackPanel();
+            var top = new StackPanel { Orientation = Orientation.Horizontal };
+            var title = MakeText(string.IsNullOrEmpty(row.Name) ? row.File : row.Name, 12.5, FontWeights.Bold, (Brush)FindResource("TextBrush"));
+            title.VerticalAlignment = VerticalAlignment.Center;
+            top.Children.Add(title);
+            var meta = MakeText("植物 " + row.Plants + " · 僵尸 " + row.Zombies
+                                + (row.Sun >= 0 ? " · 阳光 " + row.Sun : "")
+                                + (string.IsNullOrEmpty(row.Time) ? "" : " · " + row.Time), 10.5, FontWeights.Normal, (Brush)FindResource("SubBrush"));
+            meta.VerticalAlignment = VerticalAlignment.Center;
+            meta.Margin = new Thickness(12, 0, 0, 0);
+            top.Children.Add(meta);
+            sp.Children.Add(top);
+
+            var btns = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+            var load = MakeMiniBtn("加载");
+            load.Click += async (s, e) => await DoBoardCmd("加载", "/cmd?name=BoardLoad&file=" + Uri.EscapeDataString(row.File) + "&parts=" + Uri.EscapeDataString(BoardCheckedParts()));
+            var export = MakeMiniBtn("导出");
+            export.Margin = new Thickness(8, 0, 0, 0);
+            export.Click += async (s, e) => await DoBoardCmd("导出", "/cmd?name=BoardExport&file=" + Uri.EscapeDataString(row.File));
+            var del = MakeMiniBtn("删除");
+            del.Margin = new Thickness(8, 0, 0, 0);
+            del.Click += async (s, e) =>
+            {
+                var zh = string.IsNullOrEmpty(row.Name) ? row.File : row.Name;
+                if (MessageBox.Show("确定删除阵型「" + zh + "」？", "布阵器", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK) return;
+                await DoBoardCmd("删除", "/cmd?name=BoardDelete&file=" + Uri.EscapeDataString(row.File));
+            };
+            btns.Children.Add(load); btns.Children.Add(export); btns.Children.Add(del);
+            sp.Children.Add(btns);
+            bd.Child = sp;
+            return bd;
+        }
+
+        async Task DoBoardSave()
+        {
+            var nm = (_boardNameBox?.Text ?? "").Trim();
+            SetBoardStatus("保存中…");
+            // ★ 载荷用 nm=，不能用 name=（name 是 /cmd 的命令键，重名会被 ParseQuery 覆盖）
+            var url = "/cmd?name=BoardSave&parts=" + Uri.EscapeDataString(BoardCheckedParts());
+            if (nm.Length > 0) url += "&nm=" + Uri.EscapeDataString(nm);
+            var r = await GetAsync(url);
+            SetBoardStatus(string.IsNullOrEmpty(r) ? "保存失败：MOD 未连接（先把游戏开起来）。" : r);
+            await RefreshBoardList();
+        }
+
+        async Task DoBoardCmd(string action, string url)
+        {
+            SetBoardStatus(action + "中…");
+            var r = await GetAsync(url);
+            SetBoardStatus(string.IsNullOrEmpty(r) ? action + "失败：MOD 未连接。" : action + " → " + r);
+            if (action != "导出") await RefreshBoardList();
+        }
+
+        void ImportBoardFile()
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "导入分享的阵型文件",
+                Filter = "阵型快照 (*.pvzlevel)|*.pvzlevel|所有文件|*.*",
+            };
+            if (dlg.ShowDialog() != true) return;
+            _ = ImportBoardFileAsync(dlg.FileName);
+        }
+
+        async Task ImportBoardFileAsync(string src)
+        {
+            SetBoardStatus("导入中…");
+            var dir = await GetAsync("/cmd?name=BoardLibraryDir");
+            if (string.IsNullOrEmpty(dir))
+            {
+                SetBoardStatus("导入失败：拿不到游戏关卡库目录（先把游戏开起来）。");
+                return;
+            }
+            try
+            {
+                var name = System.IO.Path.GetFileName(src);
+                System.IO.File.Copy(src, System.IO.Path.Combine(dir, name), true);
+                SetBoardStatus("已导入 " + name + " → " + dir);
+                await RefreshBoardList();
+            }
+            catch (Exception ex)
+            {
+                SetBoardStatus("导入失败：" + ex.Message);
+            }
         }
 
         // ================= 存档管理 =================
@@ -2283,9 +3076,118 @@ namespace PvzheRemote
             var sp = new StackPanel();
             sp.Children.Add(MakeText(name, 13, FontWeights.Bold, (Brush)FindResource("TextBrush")));
             sp.Children.Add(MakeText((camp == "Plant" ? "植物" : "僵尸") + "  #" + idx + "  (" + x + ", " + y + ")", 10, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 3, 0, 0)));
+            var bb = MakeMiniBtn("子弹");
+            bb.HorizontalAlignment = HorizontalAlignment.Left;
+            bb.Margin = new Thickness(0, 6, 0, 0);
+            bb.Click += (s, e) => { e.Handled = true; OpenBulletPicker(id.ToString(), name + " · 单独子弹", false); };
+            sp.Children.Add(bb);
             card.Child = sp;
             card.MouseLeftButtonUp += (s, e) => OpenEntityProps(id, name, camp, x, y);
             return card;
+        }
+
+        /// <summary>子弹选择：isPacket=true = 改「这种植物/僵尸」（按卡片 id，刷出去的都生效）；
+        /// false = 只改「这一个场上实体」（instanceId）。type "" = 跟随全局，"*" = 随机种类。</summary>
+        async void OpenBulletPicker(string key, string title, bool isPacket)
+        {
+            var w = new Window
+            {
+                WindowStyle = WindowStyle.None,
+                AllowsTransparency = true,
+                Background = Brushes.Transparent,
+                Topmost = true,
+                ShowInTaskbar = false,
+                Width = 620,
+                Height = 520,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            };
+            var card = new Border
+            {
+                Background = (Brush)FindResource("GlassBrush"),
+                BorderBrush = (Brush)FindResource("BorderBrush"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(16),
+                Padding = new Thickness(18),
+            };
+            var outer = new Grid();
+            outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            outer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            var head = new Grid();
+            head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var titleTb = MakeText(title, 14, FontWeights.Bold, (Brush)FindResource("TextBrush"));
+            titleTb.TextTrimming = TextTrimming.CharacterEllipsis;
+            head.Children.Add(titleTb);
+            var close = new Button { Content = "✕", Style = (Style)FindResource("CloseButton"), Width = 28, Height = 28 };
+            Grid.SetColumn(close, 1);
+            head.Children.Add(close);
+            head.MouseLeftButtonDown += (s, e) => { try { w.DragMove(); } catch { } };
+            outer.Children.Add(head);
+            var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            var content = new WrapPanel { Margin = new Thickness(0, 10, 0, 0) };
+            scroll.Content = content;
+            Grid.SetRow(scroll, 1);
+            outer.Children.Add(scroll);
+            card.Child = outer;
+            w.Content = card;
+            w.Show();
+            close.Click += (s, e) => w.Close();
+
+            async Task Push(string type)
+            {
+                string cmd = isPacket ? "SetPacketBullet" : "SetEntityBullet";
+                var r = await GetAsync("/cmd?name=" + cmd + "&id=" + Uri.EscapeDataString(key) + "&type=" + Uri.EscapeDataString(type));
+                if (r != null)
+                {
+                    Log("「" + title + "」子弹 → " + (type == "" ? "默认（跟随全局）" : type == "*" ? "随机种类" : type));
+                    SetStatus(true, "已连接");
+                }
+                else { Log("设置子弹失败（未连接）"); SetStatus(false, "未连接"); }
+                w.Close();
+            }
+
+            void Add(string display, string type)
+            {
+                var c = new Border
+                {
+                    Background = (Brush)FindResource("CardBrushW"),
+                    BorderBrush = (Brush)FindResource("BorderBrush"),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(10),
+                    Padding = new Thickness(12, 9, 12, 9),
+                    Margin = new Thickness(0, 0, 8, 8),
+                    Cursor = System.Windows.Input.Cursors.Hand,
+                    Width = 168,
+                    Effect = FindResource("SoftShadow") as System.Windows.Media.Effects.Effect,
+                };
+                var sp2 = new StackPanel();
+                var nm = MakeText(display, 13, FontWeights.Bold, (Brush)FindResource("TextBrush"));
+                nm.TextTrimming = TextTrimming.CharacterEllipsis;
+                sp2.Children.Add(nm);
+                if (type != "" && type != "*")
+                    sp2.Children.Add(MakeText(type, 9, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 2, 0, 0)));
+                c.Child = sp2;
+                c.MouseLeftButtonUp += async (s, e) => await Push(type);
+                content.Children.Add(c);
+            }
+
+            Add("默认（跟随全局）", "");
+            Add("随机种类", "*");
+            var r = await GetAsync("/bullettypes");
+            if (r != null && r.StartsWith("["))
+            {
+                try
+                {
+                    foreach (var el in JsonSerializer.Deserialize<JsonElement>(r).EnumerateArray())
+                    {
+                        string k = el.GetProperty("key").GetString() ?? "";
+                        string n = el.GetProperty("name").GetString() ?? k;
+                        if (k.Length > 0) Add(n, k);
+                    }
+                }
+                catch { }
+            }
+            else content.Children.Add(MakeText("无法获取子弹列表（未连接）", 12, FontWeights.Normal, (Brush)FindResource("SubBrush")));
         }
 
         void OpenEntityProps(long id, string name, string camp, string x, string y)
@@ -2513,42 +3415,6 @@ namespace PvzheRemote
         [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
         struct RECT { public int Left, Top, Right, Bottom; }
 
-        void EnsureTipWindow()
-        {
-            if (_featureTip != null) return;
-            _featureTip = new Window
-            {
-                WindowStyle = WindowStyle.None,
-                AllowsTransparency = true,
-                Background = Brushes.Transparent,
-                Topmost = true,
-                ShowInTaskbar = false,
-                ShowActivated = false,
-                IsHitTestVisible = false,
-                ResizeMode = ResizeMode.NoResize,
-                SizeToContent = SizeToContent.WidthAndHeight,
-            };
-            _featureTip.Content = new TextBlock
-            {
-                FontFamily = (FontFamily)FindResource("AppFont"),
-                FontSize = 14,
-                FontWeight = FontWeights.Bold,
-                Foreground = Brushes.White,
-                Padding = new Thickness(10, 5, 10, 5),
-                Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 8, ShadowDepth = 1, Opacity = 0.8, Color = Colors.Black },
-            };
-            _tipTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1600) };
-            _tipTimer.Tick += (s, e) => { _tipTimer.Stop(); FadeOutTip(); };
-            // 文字炫彩律动（色相轮转，无外框纯文字）
-            _tipColorTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
-            _tipColorTimer.Tick += (s, e) =>
-            {
-                if (_featureTip == null || !(_featureTip.Content is TextBlock tb)) return;
-                _tipHue += 0.018f; if (_tipHue > 1f) _tipHue -= 1f;
-                tb.Foreground = new SolidColorBrush(HsvToRgb(_tipHue, 0.85f, 1f));
-            };
-        }
-
         static Rect FindGameWindow()
         {
             Rect result = Rect.Empty;
@@ -2568,37 +3434,69 @@ namespace PvzheRemote
             return result;
         }
 
-        void ShowFeatureToast(string text)
+        // ★ 右上角弹窗卡片已整体移除（ToastHost.cs → ToastHost.cs.disabled），提示不再弹出。
+        //   保留方法签名，避免散落各处的调用点报错；需要恢复时把 ToastHost.cs 改回 .cs 并还原调用即可。
+        void ShowFeatureToast(string text, bool on = true, string? tag = null)
         {
-            EnsureTipWindow();
-            if (_featureTip == null) return;
-            if (_featureTip.Content is TextBlock tb) tb.Text = text;
-            // 固定显示在屏幕右上角（游戏外，不遮挡游戏画面）
-            double w = 300, h = 44;
-            double x = SystemParameters.WorkArea.Right - w - 20;
-            double y = SystemParameters.WorkArea.Top + 18;
-            _featureTip.Left = x;
-            _featureTip.Top = y;
-            _featureTip.Opacity = 1;
-            if (!_featureTip.IsVisible) _featureTip.Show();
-            _featureTip.Topmost = true;
-            _tipTimer?.Stop();
-            _tipTimer?.Start();
-            _tipColorTimer?.Stop();
-            _tipColorTimer?.Start();
         }
 
-        void FadeOutTip()
+        /// <summary>MOD 端 /events 轮询：拿到字段变化事件 → 用本地 Feats 表翻译 → 弹卡片。
+        /// 所有来源（外置面板点击 / 游戏内操作 / 启动恢复配置 / 联机强制关机）都收敛到这里 ——
+        /// 因为 MOD 端是在 ModSettings 字段层面 diff 的，不依赖任何单个 setter。</summary>
+        async Task PollFeatureEventsAsync()
         {
+            if (_evtBusy) return;
+            _evtBusy = true;
             try
             {
-                if (_featureTip == null || !_featureTip.IsVisible) return;
-                _tipColorTimer?.Stop();
-                var anim = new DoubleAnimation(0, TimeSpan.FromMilliseconds(350));
-                anim.Completed += (s, e) => { if (_featureTip != null) _featureTip.Hide(); };
-                _featureTip.BeginAnimation(UIElement.OpacityProperty, anim);
+                var body = await GetAsync("/events?since=" + (_lastEvtSeq < 0 ? "-1" : _lastEvtSeq.ToString()));
+                if (string.IsNullOrEmpty(body) || !body.StartsWith("{")) return;   // 游戏没开/没响应：静默，不刷日志
+                using var doc = JsonDocument.Parse(body);
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("seq", out var seqEl) || !seqEl.TryGetInt32(out var seq)) return;
+
+                // 游戏重启 → MOD 端 Seq 归零，重新同步（不补弹历史）
+                if (_lastEvtSeq >= 0 && seq < _lastEvtSeq) _lastEvtSeq = -1;
+                if (_lastEvtSeq < 0) { _lastEvtSeq = seq; return; }
+                if (!root.TryGetProperty("events", out var evs) || evs.ValueKind != JsonValueKind.Array) return;
+
+                // 同一批里同一功能的多次变化只留最后一次（拖滑块时否则会刷一屏）
+                var batch = new List<(int Seq, string Name, bool On, string? Val)>();
+                var lastIdx = new Dictionary<string, int>(StringComparer.Ordinal);
+                foreach (var e in evs.EnumerateArray())
+                {
+                    int seqNo = _lastEvtSeq;
+                    if (e.TryGetProperty("seq", out var s2) && s2.TryGetInt32(out var v2)) seqNo = v2;
+                    if (seqNo > _lastEvtSeq) _lastEvtSeq = seqNo;
+
+                    string name = e.TryGetProperty("name", out var n2) && n2.ValueKind == JsonValueKind.String ? (n2.GetString() ?? "") : "";
+                    bool on = e.TryGetProperty("on", out var o2) && o2.ValueKind == JsonValueKind.True;
+                    string? val = e.TryGetProperty("val", out var v3) && v3.ValueKind == JsonValueKind.String ? v3.GetString() : null;
+                    if (name.Length == 0) continue;
+
+                    if (lastIdx.TryGetValue(name, out var at)) batch[at] = (seqNo, name, on, val);
+                    else { lastIdx[name] = batch.Count; batch.Add((seqNo, name, on, val)); }
+                }
+
+                foreach (var it in batch)
+                {
+                    if (it.Name == "*") continue;   // 批量汇总：卡片已移除，无需提示
+                    if (!FeatByName.TryGetValue(it.Name, out var feat)) continue;   // 不在功能表里的字段不弹
+                    string title = feat.Zh;
+                    if (!string.IsNullOrEmpty(it.Val))
+                    {
+                        if (feat.Kind == "slider") title += "  " + it.Val + feat.Suffix;
+                        else if (feat.Kind == "choice")
+                        {
+                            foreach (var opt in feat.Options ?? Array.Empty<string>())
+                                if (opt.StartsWith(it.Val + ":")) { title += "  " + opt.Substring(opt.IndexOf(':') + 1); break; }
+                        }
+                    }
+                    ShowFeatureToast(title, it.On);   // 空实现（卡片已移除）
+                }
             }
             catch { }
+            finally { _evtBusy = false; }
         }
 
         static Color HsvToRgb(double h, double s, double v)
@@ -2877,7 +3775,8 @@ namespace PvzheRemote
                 _settings[name] = on;
                 if (_switches.TryGetValue(name, out var sw)) sw.SetSilently(on);
                 Log(zh + " → " + (on ? "开" : "关")); SetStatus(true, "已连接");
-                if (on) ShowFeatureToast(zh + " 已开启");   // 在游戏窗口外面弹出小提示
+                // 卡片提示统一由 /events 轮询回传触发（PollFeatureEventsAsync）——
+                // 这里不再自己弹，否则一次操作会弹两次
             }
             else
             {
@@ -2919,14 +3818,91 @@ namespace PvzheRemote
             if (name == "TrickPoolEditor") { TrickPoolWindow.Show(GetAsync); return; }
             if (name == "OpenCustomPlant") { CustomPlantWindow.ShowCustomPlant(GetAsync); return; }
             if (name == "CustomPlantSync") { _ = SyncAllCustomPlantsAsync(); return; }
+            if (name == "AddSunCustom") { await AddSunAsync(); return; }
+            if (name == "BulletForPlant") { OpenGlobalBulletPicker("全部植物子弹"); return; }
+            if (name == "BulletForZombie") { OpenGlobalBulletPicker("全部僵尸子弹"); return; }
+            if (name == "SpawnSilver") { await SpawnCurrencyAsync("Silver", "银币"); return; }
+            if (name == "SpawnGold") { await SpawnCurrencyAsync("Gold", "金币"); return; }
+            if (name == "SpawnDiamond") { await SpawnCurrencyAsync("Diamond", "钻石"); return; }
+            if (name == "SpawnPurse") { await SpawnAwardAsync("Purse", "钱袋"); return; }
+            if (name == "SpawnTrophy") { await SpawnAwardAsync("Trophy", "奖杯"); return; }
             var r = await GetAsync("/cmd?name=" + name);
             if (r != null) { Log(zh + " 已执行"); SetStatus(true, "已连接"); }
             else { Log("执行失败（未连接）"); SetStatus(false, "未连接"); }
         }
 
+        // ================= 经济页动作 =================
+        /// <summary>数字输入弹窗（WPF 没有内置 InputBox，这里自己搭一个）。取消返回 false。</summary>
+        bool PromptNumber(string title, string hint, string def, int min, int max, out int value)
+        {
+            value = 0;
+            var win = new Window
+            {
+                Title = title,
+                Width = 340,
+                SizeToContent = SizeToContent.Height,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = IsLoaded ? this : null,
+                ResizeMode = ResizeMode.NoResize,
+                WindowStyle = WindowStyle.ToolWindow,
+            };
+            win.SetResourceReference(Window.BackgroundProperty, "PanelBrush");
+            win.SetResourceReference(Window.ForegroundProperty, "TextBrush");
+
+            var root = new StackPanel { Margin = new Thickness(20) };
+            root.Children.Add(MakeText(hint, 12, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 0, 0, 8)));
+            var tb = new TextBox { Text = def, FontSize = 16, Padding = new Thickness(8, 6, 8, 6) };
+            root.Children.Add(tb);
+
+            var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0) };
+            var ok = MakeMiniBtn("确定");
+            ok.IsDefault = true;
+            var cancel = MakeMiniBtn("取消");
+            cancel.IsCancel = true;
+            cancel.Margin = new Thickness(0, 0, 8, 0);
+            ok.Click += (s, e) => { win.DialogResult = true; };
+            cancel.Click += (s, e) => { win.DialogResult = false; };
+            row.Children.Add(cancel);
+            row.Children.Add(ok);
+            root.Children.Add(row);
+            win.Content = root;
+
+            tb.Focus();
+            tb.SelectAll();
+            if (win.ShowDialog() != true) return false;
+            if (!int.TryParse(tb.Text.Trim(), out int v)) { MessageBox.Show("请输入整数。", "格式错误"); return false; }
+            if (v < min) v = min;
+            if (v > max) v = max;
+            value = v;
+            return true;
+        }
+
+        async Task AddSunAsync()
+        {
+            if (!PromptNumber("自定义加阳光", "增加多少阳光（可填负数，最少减到 0）", "500", -999999, 999999, out int n)) return;
+            var r = await GetAsync("/cmd?name=AddSun&num=" + n);
+            if (r != null && r.StartsWith("ok:")) { Log("加阳光 " + n + "，当前阳光 " + r.Substring(3)); SetStatus(true, "已连接"); }
+            else { Log("加阳光失败：不在关卡内或游戏未响应"); SetStatus(false, "未连接"); }
+        }
+
+        async Task SpawnCurrencyAsync(string type, string zh)
+        {
+            if (!PromptNumber("刷" + zh, "数量（1-200）", "10", 1, 200, out int num)) return;
+            var r = await GetAsync("/cmd?name=SpawnCurrency&type=" + type + "&num=" + num);
+            if (r != null) { Log("刷" + zh + " " + num + " 个"); SetStatus(true, "已连接"); }
+            else { Log("刷" + zh + " 失败（未连接）"); SetStatus(false, "未连接"); }
+        }
+
+        async Task SpawnAwardAsync(string tag, string zh)
+        {
+            var r = await GetAsync("/cmd?name=SpawnAward&tag=" + tag);
+            if (r != null) { Log("已生成" + zh + "（掉在场地中间，走过去吃）"); SetStatus(true, "已连接"); }
+            else { Log("生成" + zh + " 失败（未连接）"); SetStatus(false, "未连接"); }
+        }
+
         async Task SyncAllCustomPlantsAsync()
         {
-            var dir = @"custom_plants";
+            var dir = @"CHANGE_ME_PROJECT_DIR\custom_plants";
             if (!System.IO.Directory.Exists(dir)) { DebugLog("自定义植物目录不存在: " + dir); return; }
             foreach (var cfg in System.IO.Directory.GetFiles(dir, "config.json", System.IO.SearchOption.AllDirectories))
             {

@@ -254,7 +254,7 @@ public class TrickPoolWindow : Window
         bool fileOk = false;
         try
         {
-            var dir = @"mod";
+            var dir = @"CHANGE_ME_PROJECT_DIR\mod";
             System.IO.Directory.CreateDirectory(dir);
             System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "trickpool.txt"), v);
             fileOk = true;
