@@ -569,6 +569,6 @@ namespace PvzheMod
                    GlobalOverridesEnabled || ConsoleEnabled || TrickEnabled || TrickBox || TrickRain || TrickConveyor;
         }
 
-        public const string Version = "0.9.3 修复版";    // mod 版本号
+        public const string Version = "26.11.7";    // mod 版本号（当天日期 yy.M.d）
     }
 }

@@ -131,7 +131,8 @@ namespace PvzheMod
                 if (pf == _lastFrame) return;
                 _lastFrame = pf;
                 // ★ 外置修改器服务端：与游戏内 UI 解耦，加载中也照常响应（用户可能在加载界面就连上了）
-                try { RemoteServer.Start(); RemoteServer.Poll(); } catch { }
+                // ★ 2026-11-07：额外挂一个 Always 帧泵，主菜单/切场景后不依赖本注入点是否存在。
+                try { RemoteServer.EnsurePump(root); RemoteServer.Start(); RemoteServer.Poll(); } catch { }
                 // ★ 首次启动：把 assets 里内置的外置程序交给【系统安装程序】
                 try { RemoteInstaller.Tick(); } catch { }
                 bool loading = CheckSceneLoading(root);

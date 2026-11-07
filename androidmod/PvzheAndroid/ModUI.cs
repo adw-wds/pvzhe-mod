@@ -1896,7 +1896,7 @@ namespace PvzheMod
                 string pid = "";
                 string path = "";
                 string proc = "未知";
-                string gameVer = "0.26.1";
+                string gameVer = "0.32";
                 try { pid = OS.GetProcessId().ToString(); } catch { }
                 try { path = OS.GetExecutablePath(); } catch { }
                 try

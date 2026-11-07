@@ -1844,10 +1844,10 @@ namespace PvzheRemote
             var about = MakePanel();
             var aboutSp = new StackPanel();
             aboutSp.Children.Add(MakeText("关于", 14, FontWeights.Bold, (Brush)FindResource("AccentBrush")));
-            aboutSp.Children.Add(MakeText("DLL 注入型辅助 Mod · 植物大战僵尸杂交版 0.31", 11, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 6, 0, 0)));
+            aboutSp.Children.Add(MakeText("DLL 注入型辅助 Mod · 植物大战僵尸杂交版 0.32", 11, FontWeights.Normal, (Brush)FindResource("SubBrush"), new Thickness(0, 6, 0, 0)));
             // ★ 版本号约定：用**当天日期**，格式 yy.M.d（如 26.9.14）。
             //   每次发布都改成当天日期，方便用户对版本（之前写死 "1.4" 看不出来是哪天的）。
-            aboutSp.Children.Add(InfoRow("Mod 版本", "外置修改器 26.10.25"));
+            aboutSp.Children.Add(InfoRow("Mod 版本", "外置修改器 26.11.7"));
             aboutSp.Children.Add(InfoRow("作者", "小晓Air"));
             var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0) };
             var biliBtn = MakeMiniBtn("B 站主页");

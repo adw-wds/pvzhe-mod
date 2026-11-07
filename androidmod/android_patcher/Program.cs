@@ -21,7 +21,14 @@ class Program
     //   与电脑版同大小但哈希不同 ⇒ 手机版必须单独注入一份）
     //   2026-10-10：0.29 → 0.30（解压目录 CHANGE_ME_ANDROID_APK_DIR）
     //   2026-10-25：0.30 → 0.31（解压目录 CHANGE_ME_ANDROID_APK_DIR）
-    static string gameDir = @"CHANGE_ME_ANDROID_APK_DIR\assets\.godot\mono\publish\arm64";
+    //   2026-11-07：0.31 → 0.32（解压目录 CHANGE_ME_ANDROID_APK_DIR；arm64 原版 19,610,624 B / 06300110DEF7F1A9）
+    //
+    // ★ 允许用环境变量 PVZHE_GAME_DIR 覆盖：构建会话里的 dotnet 进程对工作区外目录
+    //   可能没有写权限（Access denied），build_apk.ps1 会先暂存到 androidmod\work\arm64_stage
+    //   注入完再用 PowerShell 拷回真实 arm64 目录。
+    static string gameDir = Environment.GetEnvironmentVariable("PVZHE_GAME_DIR") is { Length: > 0 } envDir
+        ? envDir
+        : @"CHANGE_ME_ANDROID_APK_DIR\assets\.godot\mono\publish\arm64";
     static string mainPath = Path.Combine(gameDir, "PlantsVsZombies.dll");
     static string backupPath = mainPath + ".clean";   // 手机版干净原版（首次自动从当前文件备份）
     static string modPath = @"androidmod\PvzheAndroid\bin\Release\net8.0\PvzheMod.dll";

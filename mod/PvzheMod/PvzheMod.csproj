@@ -8,7 +8,7 @@
     <EnableDynamicLoading>true</EnableDynamicLoading>
 
     <!-- ★ 2026-10-08 修正：原 HintPath 写死 0.27，而该目录已被删除 ⇒ GodotSharp 引用失败
-         ⇒ 550 个 "未能找到类型 Node/Node2D/Vector2I"。改成可覆盖属性，默认指向当前在用的 0.31。
+         ⇒ 550 个 "未能找到类型 Node/Node2D/Vector2I"。改成可覆盖属性，默认指向当前在用的 0.32。
          换版本时用 -p:GameDataDir="...\data_PlantsVsZombies_windows_x86_64" 覆盖即可，不用改文件。 -->
     <GameDataDir Condition="'$(GameDataDir)' == ''"><你的游戏目录></GameDataDir>
   </PropertyGroup>

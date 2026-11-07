@@ -18,16 +18,35 @@ namespace PvzheMod
     public static class RemoteServer
     {
         public const int Port = 28999;
-        const ulong ClientTimeoutMs = 4000;
+        // ★ 2026-11-07：主菜单/加载界面的物理帧可能很稀疏，4s 太容易把正常请求判超时 → 8s。
+        const ulong ClientTimeoutMs = 8000;
 
         static TcpServer _server;
         static StreamPeerTcp _client;
         static ulong _clientSinceMs;
         static ulong _startMs;
         static readonly StringBuilder _req = new StringBuilder();
+        static PvzheRemotePump _pump;   // 独立帧泵：不依赖场景类注入，切场景/主菜单也持续 Poll
 
         public static bool Started { get; private set; }
         public static string LastError = "";
+
+        /// <summary>把远程服务挂到一个 Always 的 Node 上：即使 GlobalColor 注入点所在场景被切走，
+        /// 服务端仍能每帧 Poll（修复「关卡外/主菜单开关不生效」）。</summary>
+        public static void EnsurePump(Node root)
+        {
+            try
+            {
+                if (_pump != null && GodotObject.IsInstanceValid(_pump)) return;
+                var tree = root != null ? root.GetTree() : (Engine.GetMainLoop() as SceneTree);
+                if (tree == null || tree.Root == null) return;
+                _pump = new PvzheRemotePump();
+                _pump.Name = "PvzheRemotePump";
+                _pump.ProcessMode = Node.ProcessModeEnum.Always;
+                tree.Root.AddChild(_pump);
+            }
+            catch (Exception ex) { Bootstrap.Log("外置(手机): 挂帧泵失败 " + ex.Message); }
+        }
 
         // 皮肤扫描（分帧）结果缓存
         static bool _skinScanning;
@@ -436,6 +455,15 @@ namespace PvzheMod
                 else d[Uri.UnescapeDataString(kv.Substring(0, eq))] = Uri.UnescapeDataString(kv.Substring(eq + 1));
             }
             return d;
+        }
+    }
+
+    /// <summary>常驻帧泵：独立于场景注入点，每帧驱动 RemoteServer（ProcessMode=Always，暂停也跑）。</summary>
+    public sealed class PvzheRemotePump : Node
+    {
+        public override void _Process(double delta)
+        {
+            try { RemoteServer.Start(); RemoteServer.Poll(); } catch { }
         }
     }
 }
